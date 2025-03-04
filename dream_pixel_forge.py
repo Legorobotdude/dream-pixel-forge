@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QComboBox, QMessageBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline
 import torch
 from PIL import Image
 import io
@@ -27,13 +27,67 @@ RESOLUTION_PRESETS = {
     "960x640 (Landscape)": (960, 640),
 }
 
+# SDXL specific resolutions
+SDXL_RESOLUTION_PRESETS = {
+    "1024x1024 (Square)": (1024, 1024),
+    "896x1152 (Portrait)": (896, 1152),
+    "1152x896 (Landscape)": (1152, 896),
+    "832x1216 (Portrait)": (832, 1216),
+    "1216x832 (Landscape)": (1216, 832),
+}
+
+# Define the available models
+AVAILABLE_MODELS = {
+    "Stable Diffusion 1.5": {
+        "model_id": "runwayml/stable-diffusion-v1-5",
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+        "description": "Original Stable Diffusion model - fast and versatile"
+    },
+    "Stable Diffusion 2.1": {
+        "model_id": "stabilityai/stable-diffusion-2-1",
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+        "description": "Improved version with better quality and consistency"
+    },
+    "Stable Diffusion XL": {
+        "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
+        "pipeline": StableDiffusionXLPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 9.0,
+        "description": "Larger model with higher quality outputs (needs more VRAM)"
+    },
+    "Dreamlike Diffusion": {
+        "model_id": "dreamlike-art/dreamlike-diffusion-1.0",
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 8.0,
+        "description": "Artistic model that creates dreamlike, surreal images"
+    },
+    "Kandinsky 2.2": {
+        "model_id": "kandinsky-community/kandinsky-2-2-decoder",
+        "pipeline": KandinskyV22Pipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 8.0,
+        "description": "Russian alternative to SD with unique artistic style"
+    },
+}
+
 class GenerationThread(QThread):
     finished = pyqtSignal(Image.Image)
     progress = pyqtSignal(int, str)  # Now includes status message
     error = pyqtSignal(str)
 
-    def __init__(self, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height):
+    def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height):
         super().__init__()
+        self.model_config = model_config
         self.prompt = prompt
         self.negative_prompt = negative_prompt
         self.num_inference_steps = num_inference_steps
@@ -52,18 +106,20 @@ class GenerationThread(QThread):
         try:
             # Initialize the pipeline
             self.progress.emit(0, "Loading model...")
-            model_id = "runwayml/stable-diffusion-v1-5"
+            model_id = self.model_config["model_id"]
+            pipeline_class = self.model_config["pipeline"]
             
             # Clear CUDA cache if available
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 print("CUDA is available, using GPU")
+                print(f"VRAM available: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.2f} GB")
             else:
                 print("CUDA is not available, using CPU")
             
             # Initialize pipeline with safety checker
-            print("Initializing pipeline...")
-            self.pipe = StableDiffusionPipeline.from_pretrained(
+            print(f"Initializing pipeline for model: {model_id}")
+            self.pipe = pipeline_class.from_pretrained(
                 model_id,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
@@ -89,16 +145,42 @@ class GenerationThread(QThread):
             print(f"Resolution: {self.width}x{self.height}")
             
             with torch.inference_mode():
-                image = self.pipe(
-                    prompt=self.prompt,
-                    negative_prompt=self.negative_prompt,
-                    num_inference_steps=self.num_inference_steps,
-                    guidance_scale=self.guidance_scale,
-                    width=self.width,
-                    height=self.height,
-                    callback=self.progress_callback,
-                    callback_steps=1  # Update progress for every step
-                ).images[0]
+                # Different models might have slightly different APIs
+                if isinstance(self.pipe, StableDiffusionXLPipeline):
+                    image = self.pipe(
+                        prompt=self.prompt,
+                        negative_prompt=self.negative_prompt,
+                        num_inference_steps=self.num_inference_steps,
+                        guidance_scale=self.guidance_scale,
+                        width=self.width,
+                        height=self.height,
+                        callback=self.progress_callback,
+                        callback_steps=1
+                    ).images[0]
+                elif isinstance(self.pipe, KandinskyV22Pipeline):
+                    # Kandinsky has a different API
+                    image = self.pipe(
+                        prompt=self.prompt,
+                        negative_prompt=self.negative_prompt,
+                        num_inference_steps=self.num_inference_steps,
+                        guidance_scale=self.guidance_scale,
+                        width=self.width,
+                        height=self.height,
+                        callback=self.progress_callback,
+                        callback_steps=1
+                    ).images[0]
+                else:
+                    # Standard StableDiffusion
+                    image = self.pipe(
+                        prompt=self.prompt,
+                        negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
+                        num_inference_steps=self.num_inference_steps,
+                        guidance_scale=self.guidance_scale,
+                        width=self.width,
+                        height=self.height,
+                        callback=self.progress_callback,
+                        callback_steps=1
+                    ).images[0]
 
             print("Generation completed successfully")
             self.finished.emit(image)
@@ -116,7 +198,7 @@ class GenerationThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DreamPixelForge - Stable Diffusion")
+        self.setWindowTitle("DreamPixelForge - Text to Image")
         self.setMinimumSize(800, 600)
         
         # Create main widget and layout
@@ -126,6 +208,22 @@ class MainWindow(QMainWindow):
         
         # Create input section
         input_layout = QVBoxLayout()
+        
+        # Model selection
+        model_layout = QHBoxLayout()
+        model_label = QLabel("Model:")
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(AVAILABLE_MODELS.keys())
+        self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        
+        # Add a model info label
+        self.model_info = QLabel(AVAILABLE_MODELS["Stable Diffusion 1.5"]["description"])
+        self.model_info.setWordWrap(True)
+        
+        model_layout.addWidget(model_label)
+        model_layout.addWidget(self.model_combo)
+        input_layout.addLayout(model_layout)
+        input_layout.addWidget(self.model_info)
         
         # Prompt input
         prompt_layout = QHBoxLayout()
@@ -151,7 +249,7 @@ class MainWindow(QMainWindow):
         resolution_layout = QVBoxLayout()
         resolution_label = QLabel("Resolution:")
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(RESOLUTION_PRESETS.keys())
+        self.update_resolutions()
         resolution_layout.addWidget(resolution_label)
         resolution_layout.addWidget(self.resolution_combo)
         params_layout.addLayout(resolution_layout)
@@ -212,6 +310,32 @@ class MainWindow(QMainWindow):
         self.current_image = None
         self.generation_thread = None
 
+    def on_model_changed(self, model_name):
+        """Update UI when model selection changes"""
+        model_config = AVAILABLE_MODELS[model_name]
+        self.model_info.setText(model_config["description"])
+        self.guidance_input.setValue(model_config["default_guidance_scale"])
+        self.update_resolutions()
+        
+        # Enable/disable negative prompt based on model support
+        self.neg_prompt_input.setEnabled(model_config["supports_negative_prompt"])
+
+    def update_resolutions(self):
+        """Update the resolution presets based on selected model"""
+        current_model = self.model_combo.currentText()
+        resolution_presets = AVAILABLE_MODELS[current_model]["resolution_presets"]
+        
+        # Remember current selection if possible
+        current_selection = self.resolution_combo.currentText()
+        
+        self.resolution_combo.clear()
+        self.resolution_combo.addItems(resolution_presets.keys())
+        
+        # Try to restore previous selection if it exists in the new list
+        index = self.resolution_combo.findText(current_selection)
+        if index >= 0:
+            self.resolution_combo.setCurrentIndex(index)
+
     def generate_image(self):
         if not self.prompt_input.text():
             return
@@ -221,11 +345,17 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.status_label.setText("Initializing...")
         
+        # Get current model configuration
+        current_model = self.model_combo.currentText()
+        model_config = AVAILABLE_MODELS[current_model]
+        
         # Get selected resolution
         selected_resolution = self.resolution_combo.currentText()
-        width, height = RESOLUTION_PRESETS[selected_resolution]
+        resolution_presets = model_config["resolution_presets"]
+        width, height = resolution_presets[selected_resolution]
         
         self.generation_thread = GenerationThread(
+            model_config,
             self.prompt_input.text(),
             self.neg_prompt_input.text(),
             self.steps_input.value(),
