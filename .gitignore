@@ -30,6 +30,16 @@ build/
 .cache/
 huggingface/
 
+# Specific model directory exclusion
+# Ignore model files but keep the directory
+models/**/*.safetensors
+models/**/*.ckpt
+models/**/*.pt
+models/**/*.bin
+models/**/*.pth
+# Keep the models directory itself
+!models/.gitkeep
+
 # IDE files
 .idea/
 .vscode/
