@@ -18,6 +18,7 @@ A modern GUI application for running multiple AI image generation models locally
 - Save generated images in various formats
 - GPU acceleration support (if available)
 - Real-time progress tracking
+- Clear feedback during model downloads
 
 ## Requirements
 
@@ -76,6 +77,22 @@ Artistic model that creates dreamlike, surreal images.
 
 ### Kandinsky 2.2
 Russian alternative to SD with unique artistic style.
+
+## Model Downloads and First Use
+
+When you first use a model, it will be downloaded automatically from Hugging Face. The application will show:
+1. A first-time use notice with download size information
+2. Real-time download status in the progress area
+3. Elapsed time for longer downloads
+
+Download sizes for each model:
+- Stable Diffusion 1.5: ~4GB
+- Stable Diffusion 2.1: ~4.2GB
+- Dreamlike Diffusion: ~4GB
+- Kandinsky 2.2: ~4.5GB
+- Stable Diffusion XL: ~6.5GB
+
+**Note:** Downloads happen only once per model. After downloading, the model will be loaded directly from your local cache.
 
 ## Model Storage and Cache Management
 

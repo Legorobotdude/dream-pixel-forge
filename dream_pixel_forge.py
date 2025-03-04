@@ -11,6 +11,8 @@ import torch
 from PIL import Image
 import io
 import traceback
+from huggingface_hub import scan_cache_dir, HfFolder, model_info
+import time
 
 # Default negative prompts that work well with SD v1.5
 DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, deformed, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits, mutated hands and fingers, poorly drawn hands, poorly drawn face, poorly drawn feet, poorly drawn legs, poorly drawn limbs, poorly drawn anatomy, wrong anatomy, incorrect anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits"
@@ -44,7 +46,8 @@ AVAILABLE_MODELS = {
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
-        "description": "Original Stable Diffusion model - fast and versatile"
+        "description": "Original Stable Diffusion model - fast and versatile",
+        "size_gb": 4.0
     },
     "Stable Diffusion 2.1": {
         "model_id": "stabilityai/stable-diffusion-2-1",
@@ -52,7 +55,8 @@ AVAILABLE_MODELS = {
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
-        "description": "Improved version with better quality and consistency"
+        "description": "Improved version with better quality and consistency",
+        "size_gb": 4.2
     },
     "Stable Diffusion XL": {
         "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
@@ -60,7 +64,8 @@ AVAILABLE_MODELS = {
         "resolution_presets": SDXL_RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 9.0,
-        "description": "Larger model with higher quality outputs (needs more VRAM)"
+        "description": "Larger model with higher quality outputs (needs more VRAM)",
+        "size_gb": 6.5
     },
     "Dreamlike Diffusion": {
         "model_id": "dreamlike-art/dreamlike-diffusion-1.0",
@@ -68,7 +73,8 @@ AVAILABLE_MODELS = {
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
-        "description": "Artistic model that creates dreamlike, surreal images"
+        "description": "Artistic model that creates dreamlike, surreal images",
+        "size_gb": 4.0
     },
     "Kandinsky 2.2": {
         "model_id": "kandinsky-community/kandinsky-2-2-decoder",
@@ -76,9 +82,43 @@ AVAILABLE_MODELS = {
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
-        "description": "Russian alternative to SD with unique artistic style"
+        "description": "Russian alternative to SD with unique artistic style",
+        "size_gb": 4.5
     },
 }
+
+def is_model_downloaded(model_id):
+    """Check if model is already in the cache"""
+    try:
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_id == model_id:
+                return True
+        return False
+    except:
+        return False  # If we can't determine, assume it's not downloaded
+
+class DownloadTracker(QThread):
+    """Thread to check download progress"""
+    progress = pyqtSignal(str)
+    
+    def __init__(self, model_id, size_gb):
+        super().__init__()
+        self.model_id = model_id
+        self.size_gb = size_gb
+        self.running = True
+        
+    def run(self):
+        start_time = time.time()
+        while self.running:
+            elapsed = time.time() - start_time
+            self.progress.emit(f"Downloading model {self.model_id} (~{self.size_gb:.1f}GB)... This may take several minutes.")
+            if elapsed > 10:
+                self.progress.emit(f"Still downloading {self.model_id}... (~{self.size_gb:.1f}GB, {elapsed:.0f}s elapsed)")
+            time.sleep(2)
+            
+    def stop(self):
+        self.running = False
 
 class GenerationThread(QThread):
     finished = pyqtSignal(Image.Image)
@@ -95,6 +135,7 @@ class GenerationThread(QThread):
         self.width = width
         self.height = height
         self.pipe = None
+        self.download_tracker = None
 
     def progress_callback(self, step, timestep, latents):
         if step is not None:
@@ -108,6 +149,7 @@ class GenerationThread(QThread):
             self.progress.emit(0, "Loading model...")
             model_id = self.model_config["model_id"]
             pipeline_class = self.model_config["pipeline"]
+            size_gb = self.model_config.get("size_gb", 4.0)
             
             # Clear CUDA cache if available
             if torch.cuda.is_available():
@@ -117,12 +159,28 @@ class GenerationThread(QThread):
             else:
                 print("CUDA is not available, using CPU")
             
+            # Check if model is already downloaded
+            if not is_model_downloaded(model_id):
+                print(f"Model {model_id} not found in cache, will be downloaded")
+                self.progress.emit(0, f"First time using {model_id}. Downloading (~{size_gb:.1f}GB)...")
+                
+                # Start a thread to provide ongoing download status
+                self.download_tracker = DownloadTracker(model_id, size_gb)
+                self.download_tracker.progress.connect(lambda msg: self.progress.emit(0, msg))
+                self.download_tracker.start()
+            
             # Initialize pipeline with safety checker
             print(f"Initializing pipeline for model: {model_id}")
             self.pipe = pipeline_class.from_pretrained(
                 model_id,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
+            
+            # Stop the download tracker if it's running
+            if self.download_tracker:
+                self.download_tracker.stop()
+                self.download_tracker.wait()
+                self.download_tracker = None
             
             if torch.cuda.is_available():
                 self.progress.emit(0, "Moving model to GPU...")
@@ -190,6 +248,10 @@ class GenerationThread(QThread):
             self.error.emit(error_msg)
         finally:
             # Clean up
+            if self.download_tracker:
+                self.download_tracker.stop()
+                self.download_tracker.wait()
+            
             if self.pipe is not None:
                 del self.pipe
             if torch.cuda.is_available():
@@ -309,6 +371,23 @@ class MainWindow(QMainWindow):
         
         self.current_image = None
         self.generation_thread = None
+        
+        # Check if first time use
+        self.check_first_use()
+
+    def check_first_use(self):
+        """Show a message if this is the first use about model downloads"""
+        model_id = AVAILABLE_MODELS["Stable Diffusion 1.5"]["model_id"]
+        if not is_model_downloaded(model_id):
+            QMessageBox.information(
+                self,
+                "First Time Use",
+                "The first time you use each model, it will be downloaded from Hugging Face.\n\n"
+                "This can take several minutes depending on your internet speed.\n\n"
+                "- Stable Diffusion models: ~4GB each\n"
+                "- Stable Diffusion XL: ~6.5GB\n\n"
+                "Models are downloaded only once and cached for future use."
+            )
 
     def on_model_changed(self, model_name):
         """Update UI when model selection changes"""
@@ -319,6 +398,11 @@ class MainWindow(QMainWindow):
         
         # Enable/disable negative prompt based on model support
         self.neg_prompt_input.setEnabled(model_config["supports_negative_prompt"])
+        
+        # Show download size information if model isn't downloaded yet
+        if not is_model_downloaded(model_config["model_id"]):
+            size_gb = model_config.get("size_gb", 4.0)
+            self.status_label.setText(f"Note: {model_name} (~{size_gb:.1f}GB) will be downloaded on first use")
 
     def update_resolutions(self):
         """Update the resolution presets based on selected model"""
