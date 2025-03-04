@@ -1094,9 +1094,6 @@ class MainWindow(QMainWindow):
         # Set the current image index
         self.current_image_index = index
         
-        # Display the image
-        self.display_image(index)
-        
         # Enable the save button after the first image
         self.save_button.setEnabled(True)
         
