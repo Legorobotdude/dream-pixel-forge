@@ -13,7 +13,7 @@ A modern GUI application for running multiple AI image generation models locally
   - Kandinsky 2.2
   - Pony Diffusion V6 XL
 - Text-to-image generation with various models
-- Support for negative prompts
+- Support for negative prompts (model-specific defaults for optimal quality)
 - Adjustable generation parameters (steps and guidance scale)
 - Batch image generation (generate up to 10 images at once)
 - Model-specific resolution presets
@@ -130,6 +130,7 @@ DreamPixelForge supports loading custom models from Civitai and other sources. T
 2. Select your model from the dropdown list
 3. The appropriate resolution presets will be loaded based on the model type you specified
 4. Generate images as you would with built-in models
+5. Model-specific negative prompts will be automatically applied based on the model type
 
 ### Managing Local Models
 
@@ -137,6 +138,29 @@ Use the "Manage Models" button to:
 - Add new models
 - Import models from the models folder
 - Remove models from the registry (this doesn't delete the model files)
+- Auto-detection of Pony models with appropriate configuration
+
+## Model-Specific Negative Prompts
+
+DreamPixelForge now features optimized negative prompts for each supported model type:
+
+- **Stable Diffusion 1.5**: Basic negative prompt to avoid common artifacts and issues
+- **Stable Diffusion 2.1**: Extended negative prompt tailored to SD 2.1's characteristics
+- **Stable Diffusion XL**: Comprehensive negative prompt optimized for SDXL models
+- **Dreamlike Diffusion**: Special negative prompt for artistic models
+- **Kandinsky 2.2**: Negative prompt adapted to Kandinsky's unique architecture
+- **Pony Diffusion V6 XL**: Specialized negative prompt for stylized art generation
+
+These model-specific negative prompts will be automatically applied when you switch between models, improving image quality without manual adjustment. You can still customize the negative prompt as needed for specific results.
+
+## Automatic Model Detection
+
+The application now automatically detects and properly configures certain model types:
+
+- **Pony Models**: Automatically detected and configured as SDXL models with appropriate settings
+- **Local Models**: Properly categorized based on their architecture (SD 1.5, SD 2.1, SDXL)
+
+This ensures you get the best quality output with minimal manual configuration.
 
 ## Ollama Prompt Enhancement
 

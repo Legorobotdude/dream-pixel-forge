@@ -109,8 +109,23 @@ class OllamaThread(QThread):
 # Local model registry to store information about local models
 LOCAL_MODELS = {}  # Will be populated when local models are added
 
-# Default negative prompts that work well with SD v1.5
-DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, deformed, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits, mutated hands and fingers, poorly drawn hands, poorly drawn face, poorly drawn feet, poorly drawn legs, poorly drawn limbs, poorly drawn anatomy, wrong anatomy, incorrect anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits"
+# Model-specific default negative prompts
+DEFAULT_NEGATIVE_PROMPTS = {
+    "sd15": "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, deformed, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits, mutated hands and fingers",
+    
+    "sd21": "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, disgusting, bad proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, watermark, signature, text, logo, banner, web address, artist name",
+    
+    "sdxl": "ugly, blurry, deformed, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, disconnected limbs, bad proportions, malformed limbs, missing arms, extra arms, missing legs, extra legs, mutated hands, fused fingers, too many fingers, missing fingers, extra fingers, poorly drawn hands, poorly drawn face, poorly drawn feet, mutation, duplicate, morbid, mutilated, poorly drawn body, dehydrated, out of frame, bad art, bad photography, pixelated, jpeg artifacts, signature, watermark, username, artist name, text, error, out of focus, lowres",
+    
+    "dreamlike": "ugly, blurry, watermark, text, error, pixelated, artifacting, grains, low-resolution, distorted, deformed, distorted proportions, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, low quality, gross, distasteful, bad lighting, low contrast, underexposed, overexposed, semi-realistic, child",
+    
+    "kandinsky": "low quality, bad quality, sketches, bad anatomy, poor detail, missing detail, missing limbs, bad proportions, deformed face, deformed hands, deformed limbs, extra limbs, too many limbs, extra fingers, too many fingers, fused fingers, watermark, signature, disfigured, duplicate, cropped, blurry, bad art, poorly drawn face, ugly, deformed eyes, text, letters",
+    
+    "pony": "bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, mutated hands, mutated legs, more than 2 thighs, multiple thighs, cropped, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutilated, poorly drawn hands, poorly drawn face, poorly drawn feet, poorly drawn legs, blurry, blurred, text, signature, watermark, artist name, logo, duplicate, disfigured, deformed, extra limbs, low resolution, jpeg artifacts, score_4, score_5, score_6"
+}
+
+# Use consistent variable name for backward compatibility
+DEFAULT_NEGATIVE_PROMPT = DEFAULT_NEGATIVE_PROMPTS["sd15"]
 
 # Resolution presets that work well with SD v1.5
 RESOLUTION_PRESETS = {
@@ -140,18 +155,21 @@ MODEL_TYPES = {
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sd15"]
     },
     "Stable Diffusion 2.1": {
         "pipeline": StableDiffusionPipeline,
         "resolution_presets": RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sd21"]
     },
     "Stable Diffusion XL": {
         "pipeline": StableDiffusionXLPipeline,
         "resolution_presets": SDXL_RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 9.0,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sdxl"]
     }
 }
 
@@ -166,12 +184,19 @@ class LocalModelInfo:
     def get_config(self):
         """Get model configuration compatible with AVAILABLE_MODELS"""
         base_config = MODEL_TYPES[self.model_type].copy()
+        
+        # Keep all fields from the base config, including negative_prompt
         config = {
             "model_id": self.file_path,  # Use file path as the ID
             "description": self.description,
             "is_local": True,  # Flag to identify this is a local model
             **base_config
         }
+        
+        # Apply Pony model override if this is flagged as a Pony model
+        if hasattr(self, 'pony_override') and self.pony_override:
+            config["negative_prompt"] = DEFAULT_NEGATIVE_PROMPTS["pony"]
+        
         return config
 
 # Available samplers
@@ -197,7 +222,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
         "description": "Original Stable Diffusion model - fast and versatile",
-        "size_gb": 4.0
+        "size_gb": 4.0,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sd15"]
     },
     "Stable Diffusion 2.1": {
         "model_id": "stabilityai/stable-diffusion-2-1",
@@ -206,7 +232,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 7.5,
         "description": "Improved version with better quality and consistency",
-        "size_gb": 4.2
+        "size_gb": 4.2,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sd21"]
     },
     "Stable Diffusion XL": {
         "model_id": "stabilityai/stable-diffusion-xl-base-1.0",
@@ -215,7 +242,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 9.0,
         "description": "Larger model with higher quality outputs (needs more VRAM)",
-        "size_gb": 6.5
+        "size_gb": 6.5,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sdxl"]
     },
     "Dreamlike Diffusion": {
         "model_id": "dreamlike-art/dreamlike-diffusion-1.0",
@@ -224,7 +252,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
         "description": "Artistic model that creates dreamlike, surreal images",
-        "size_gb": 4.0
+        "size_gb": 4.0,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["dreamlike"]
     },
     "Kandinsky 2.2": {
         "model_id": "kandinsky-community/kandinsky-2-2-decoder",
@@ -233,7 +262,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
         "description": "Russian alternative to SD with unique artistic style",
-        "size_gb": 4.5
+        "size_gb": 4.5,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["kandinsky"]
     },
     "Pony Diffusion V6 XL": {
         "model_id": "LyliaEngine/Pony_Diffusion_V6_XL",
@@ -242,7 +272,8 @@ AVAILABLE_MODELS = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
         "description": "Specialized model for stylized art",
-        "size_gb": 7.0
+        "size_gb": 7.0,
+        "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["pony"]
     },
 }
 
@@ -687,7 +718,7 @@ class MainWindow(QMainWindow):
         neg_prompt_layout = QHBoxLayout()
         neg_prompt_label = QLabel("Negative Prompt:")
         self.neg_prompt_input = QLineEdit()
-        self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPT)
+        self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPTS["sd15"])
         neg_prompt_layout.addWidget(neg_prompt_label)
         neg_prompt_layout.addWidget(self.neg_prompt_input)
         input_layout.addLayout(neg_prompt_layout)
@@ -963,6 +994,10 @@ class MainWindow(QMainWindow):
         # Enable/disable negative prompt based on model support
         self.neg_prompt_input.setEnabled(model_config["supports_negative_prompt"])
         
+        # Set the appropriate negative prompt for this model
+        if "negative_prompt" in model_config and model_config["supports_negative_prompt"]:
+            self.neg_prompt_input.setText(model_config["negative_prompt"])
+        
         # Show download size information if model isn't downloaded yet
         if not is_model_downloaded(model_config["model_id"]):
             size_gb = model_config.get("size_gb", 4.0)
@@ -1218,7 +1253,21 @@ class MainWindow(QMainWindow):
         
         # Enable/disable negative prompt based on model support
         self.neg_prompt_input.setEnabled(config["supports_negative_prompt"])
-    
+        
+        # Set the negative prompt based on the model config
+        if config["supports_negative_prompt"] and "negative_prompt" in config:
+            self.neg_prompt_input.setText(config["negative_prompt"])
+        # Fall back to determining based on model type if not in config
+        elif config["supports_negative_prompt"]:
+            # Determine which negative prompt to use based on model type
+            if isinstance(config["pipeline"], StableDiffusionXLPipeline):
+                self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPTS["sdxl"])
+            elif model_info.model_type == "Stable Diffusion 2.1":
+                self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPTS["sd21"])
+            else:
+                # Default to SD 1.5 negative prompt for other model types
+                self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPTS["sd15"])
+
     def update_resolutions_from_config(self, model_config):
         """Update the resolution presets based on provided configuration"""
         resolution_presets = model_config["resolution_presets"]
@@ -1493,6 +1542,8 @@ def auto_import_local_models():
         
         # Determine model type - check for Pony models
         filename_lower = default_name.lower()
+        is_pony_model = False
+        
         if ("pony" in filename_lower or 
             "ponyrealism" in filename_lower or 
             "ponydiffusion" in filename_lower or
@@ -1500,22 +1551,40 @@ def auto_import_local_models():
             "pony-diffusion" in filename_lower or
             "mlp" in filename_lower):  # My Little Pony abbreviation
             model_type = "Stable Diffusion XL"  # Set all Pony models as SDXL
+            is_pony_model = True
             pony_count += 1
         else:
             # Default to SD 1.5 for others
             model_type = "Stable Diffusion 1.5"
+        
+        # Create description with special note for Pony models
+        description = f"Auto-imported local model: {default_name}"
+        if is_pony_model:
+            description += " (Pony model - configured for SDXL architecture)"
+        else:
+            description += f" ({model_type})"
         
         # Create model info and add to LOCAL_MODELS
         model_info = LocalModelInfo(
             name=default_name,
             file_path=model_path,
             model_type=model_type,
-            description=f"Auto-imported local model: {default_name} ({model_type})"
+            description=description
         )
         
-        LOCAL_MODELS[model_info.name] = model_info
+        # For Pony models, set the custom negative prompt manually
+        if is_pony_model:
+            # Get the base config first
+            config = model_info.get_config()
+            # Then manually override the negative prompt
+            config["negative_prompt"] = DEFAULT_NEGATIVE_PROMPTS["pony"]
+            # Store the modified config back in the model info
+            model_info.pony_override = True  # Flag to indicate this is a Pony model
+            # Note: The next time get_config is called, we'll need to restore this override
+        
+        LOCAL_MODELS[default_name] = model_info
         imported_count += 1
-        imported_models.append(f"• {default_name} ({model_type})")
+        imported_models.append(default_name)
     
     # Show a message if models were imported
     if imported_count > 0:
