@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QFormLayout)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QAction
-from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
 import torch
 from PIL import Image
 import io
@@ -376,6 +376,20 @@ class GenerationThread(QThread):
                         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
                         local_files_only=True
                     )
+                
+                # Fix UNet for local SDXL models that expect additional embeddings
+                try:
+                    if pipeline_class == StableDiffusionXLPipeline or "XL" in model_id:
+                        # Check if UNet has addition_embed_type set
+                        if hasattr(self.pipe.unet, "config") and hasattr(self.pipe.unet.config, "addition_embed_type"):
+                            if self.pipe.unet.config.addition_embed_type is not None:
+                                print("Detected SDXL model that requires additional embeddings")
+                                print("Setting addition_embed_type to None to prevent errors")
+                                self.pipe.unet.config.addition_embed_type = None
+                                print("UNet configuration updated for compatibility with local model")
+                except Exception as e:
+                    print(f"Warning: Could not fix UNet configuration: {str(e)}")
+                    print("Generation might fail with this model")
             else:
                 # Load remote model from Hugging Face Hub
                 self.pipe = pipeline_class.from_pretrained(
@@ -448,35 +462,35 @@ class GenerationThread(QThread):
                     # For subsequent images or if no seed was provided, use random seeds
                     generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
                     # Generate a seed that fits in a 32-bit integer to avoid overflow
-                    random_seed = random.randint(0, 2147483647)
-                    generator.manual_seed(random_seed)
-                    current_seed = random_seed
+                    current_seed = random.randint(0, 2147483647)
+                    generator.manual_seed(current_seed)
                     print(f"Using random seed for image {i+1}: {current_seed}")
                 
+                # Store the seed for later reference
                 self.generated_seeds.append(current_seed)
                 
-                # Set the scheduler (sampler) if specified
-                if self.sampler and hasattr(self.pipe, "scheduler"):
+                # Set the sampler/scheduler if specified
+                if self.sampler:
                     try:
-                        # Import necessary samplers dynamically to avoid bloating the imports
-                        from diffusers import (
-                            DDIMScheduler, DPMSolverMultistepScheduler,
-                            EulerAncestralDiscreteScheduler, EulerDiscreteScheduler,
-                            LMSDiscreteScheduler, HeunDiscreteScheduler,
-                            KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler,
-                            DPMSolverSinglestepScheduler
-                        )
-                        
-                        # Map the sampler name to the appropriate scheduler class
+                        # Map sampler names to scheduler classes
                         schedulers = {
-                            "ddim": DDIMScheduler,
-                            "dpmpp_2m": DPMSolverMultistepScheduler,
-                            "euler_ancestral": EulerAncestralDiscreteScheduler,
                             "euler": EulerDiscreteScheduler,
-                            "lms": LMSDiscreteScheduler,
+                            "euler_ancestral": EulerAncestralDiscreteScheduler,
                             "heun": HeunDiscreteScheduler,
-                            "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
                             "dpm_2": KDPM2DiscreteScheduler,
+                            "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
+                            "lms": LMSDiscreteScheduler,
+                            "pndm": PNDMScheduler,
+                            "ddim": DDIMScheduler,
+                            "ddpm": DDPMScheduler,
+                            "deis": DEISMultistepScheduler,
+                            "dpm_sde": DPMSolverSDEScheduler,
+                            "dpm_solver": DPMSolverMultistepScheduler,
+                            "karras_ve": KarrasVeScheduler,
+                            "dpmsolver++": DPMSolverMultistepScheduler,
+                            "dpmsingle": DPMSolverSinglestepScheduler,
+                            "dpmpp_2m": DPMSolverMultistepScheduler,
+                            "dpmpp_sde": DPMSolverSDEScheduler,
                             "dpmpp_2s_ancestral": DPMSolverSinglestepScheduler
                         }
                         
@@ -495,45 +509,82 @@ class GenerationThread(QThread):
                         print("Using default sampler")
                 
                 with torch.inference_mode():
-                    # Different models might have slightly different APIs
-                    if isinstance(self.pipe, StableDiffusionXLPipeline):
-                        image = self.pipe(
-                            prompt=self.prompt,
-                            negative_prompt=self.negative_prompt,
-                            num_inference_steps=self.num_inference_steps,
-                            guidance_scale=self.guidance_scale,
-                            width=self.width,
-                            height=self.height,
-                            callback=self.progress_callback,
-                            callback_steps=1,
-                            generator=generator
-                        ).images[0]
-                    elif isinstance(self.pipe, KandinskyV22Pipeline):
-                        # Kandinsky has a different API
-                        image = self.pipe(
-                            prompt=self.prompt,
-                            negative_prompt=self.negative_prompt,
-                            num_inference_steps=self.num_inference_steps,
-                            guidance_scale=self.guidance_scale,
-                            width=self.width,
-                            height=self.height,
-                            callback=self.progress_callback,
-                            callback_steps=1,
-                            generator=generator
-                        ).images[0]
-                    else:
-                        # Standard StableDiffusion
-                        image = self.pipe(
-                            prompt=self.prompt,
-                            negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
-                            num_inference_steps=self.num_inference_steps,
-                            guidance_scale=self.guidance_scale,
-                            width=self.width,
-                            height=self.height,
-                            callback=self.progress_callback,
-                            callback_steps=1,
-                            generator=generator
-                        ).images[0]
+                    try:
+                        # Different models might have slightly different APIs
+                        if isinstance(self.pipe, StableDiffusionXLPipeline):
+                            # For SDXL pipelines
+                            image = self.pipe(
+                                prompt=self.prompt,
+                                negative_prompt=self.negative_prompt,
+                                num_inference_steps=self.num_inference_steps,
+                                guidance_scale=self.guidance_scale,
+                                width=self.width,
+                                height=self.height,
+                                callback=self.progress_callback,
+                                callback_steps=1,
+                                generator=generator
+                            ).images[0]
+                        elif isinstance(self.pipe, KandinskyV22Pipeline):
+                            # Kandinsky has a different API
+                            image = self.pipe(
+                                prompt=self.prompt,
+                                negative_prompt=self.negative_prompt,
+                                num_inference_steps=self.num_inference_steps,
+                                guidance_scale=self.guidance_scale,
+                                width=self.width,
+                                height=self.height,
+                                callback=self.progress_callback,
+                                callback_steps=1,
+                                generator=generator
+                            ).images[0]
+                        else:
+                            # Standard StableDiffusion
+                            image = self.pipe(
+                                prompt=self.prompt,
+                                negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
+                                num_inference_steps=self.num_inference_steps,
+                                guidance_scale=self.guidance_scale,
+                                width=self.width,
+                                height=self.height,
+                                callback=self.progress_callback,
+                                callback_steps=1,
+                                generator=generator
+                            ).images[0]
+                    except TypeError as e:
+                        if "argument of type 'NoneType' is not iterable" in str(e):
+                            print("Detected issue with added_cond_kwargs, trying with empty dict...")
+                            if isinstance(self.pipe, StableDiffusionXLPipeline):
+                                # Fallback for SDXL models with the NoneType error
+                                image = self.pipe(
+                                    prompt=self.prompt,
+                                    negative_prompt=self.negative_prompt,
+                                    num_inference_steps=self.num_inference_steps,
+                                    guidance_scale=self.guidance_scale,
+                                    width=self.width,
+                                    height=self.height,
+                                    callback=self.progress_callback,
+                                    callback_steps=1,
+                                    generator=generator,
+                                    added_cond_kwargs={"text_embeds": torch.zeros(1, 1280, device=self.pipe.device), 
+                                                      "time_ids": torch.zeros(1, 6, device=self.pipe.device)}
+                                ).images[0]
+                            else:
+                                # For standard SD models with the same issue
+                                image = self.pipe(
+                                    prompt=self.prompt,
+                                    negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
+                                    num_inference_steps=self.num_inference_steps,
+                                    guidance_scale=self.guidance_scale,
+                                    width=self.width,
+                                    height=self.height,
+                                    callback=self.progress_callback,
+                                    callback_steps=1,
+                                    generator=generator,
+                                    added_cond_kwargs={}
+                                ).images[0]
+                        else:
+                            # Re-raise if it's a different error
+                            raise
                 
                 generated_images.append(image)
                 # Emit signal for UI update with each generated image
@@ -1005,315 +1056,6 @@ class MainWindow(QMainWindow):
             
             # Delete the navigation layout attribute
             delattr(self, 'image_nav_layout')
-        
-        self.generation_thread = GenerationThread(
-            model_config,
-            prompt,
-            negative_prompt,
-            self.steps_input.value(),
-            self.guidance_input.value(),
-            width,
-            height,
-            seed_value,
-            sampler_id,
-            batch_size
-        )
-        
-        self.generation_thread.finished.connect(self.handle_generated_images)
-        self.generation_thread.progress.connect(self.handle_progress)
-        self.generation_thread.image_ready.connect(self.handle_image_ready)
-        self.generation_thread.error.connect(self.handle_error)
-        self.generation_thread.start()
-
-    def handle_progress(self, progress, status):
-        """Handle progress updates from the generation thread"""
-        self.progress_bar.setValue(progress)
-        self.status_label.setText(status)
-        
-        # Force the UI to refresh immediately, particularly important for download messages
-        QApplication.processEvents()
-
-    def handle_generated_images(self, images):
-        """Handle completion of all image generations"""
-        # All images are already stored in self.current_images and displayed via handle_image_ready
-        self.progress_bar.setVisible(False)
-        self.status_label.setText(f"Completed generating {len(images)} images")
-        self.generate_button.setEnabled(True)
-        
-        # Update the seed input value if the user specified a seed
-        original_seed_setting = self.seed_input.value()
-        if original_seed_setting != -1 and self.generation_thread and self.generation_thread.generated_seeds:
-            # Keep the first seed in the input box, which was the user's specified seed
-            self.seed_input.setValue(self.generation_thread.generated_seeds[0])
-        
-        # Display a summary of the seeds used
-        if self.generation_thread and self.generation_thread.generated_seeds:
-            seed_str = ", ".join(map(str, self.generation_thread.generated_seeds[:3]))
-            if len(self.generation_thread.generated_seeds) > 3:
-                seed_str += f", ... ({len(self.generation_thread.generated_seeds)} total)"
-            self.status_label.setText(f"Completed generating {len(images)} images with seeds: {seed_str}")
-        
-        # Update navigation controls if they exist
-        if hasattr(self, 'image_counter_label') and self.current_image_index is not None:
-            # Make sure we're showing the most recent image
-            self.display_image(self.current_image_index)
-            
-            # Update navigation buttons
-            if len(images) > 1:
-                self.prev_button.setEnabled(self.current_image_index > 0)
-                self.next_button.setEnabled(self.current_image_index < len(images) - 1)
-
-    def display_image(self, index):
-        """Display an image from the batch at the specified index"""
-        if not self.current_images or index < 0 or index >= len(self.current_images):
-            return
-            
-        image = self.current_images[index]
-        
-        # Convert PIL image to QPixmap
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        buffer.seek(0)
-        qimage = QImage.fromData(buffer.getvalue())
-        pixmap = QPixmap.fromImage(qimage)
-        
-        # Scale pixmap to fit label while maintaining aspect ratio
-        scaled_pixmap = pixmap.scaled(
-            self.image_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        self.image_label.setPixmap(scaled_pixmap)
-        
-        # Update navigation controls if they exist
-        if hasattr(self, 'image_counter_label'):
-            self.image_counter_label.setText(f"Image {index + 1}/{len(self.current_images)}")
-            self.prev_button.setEnabled(index > 0)
-            self.next_button.setEnabled(index < len(self.current_images) - 1)
-        
-        # Set the current image index
-        self.current_image_index = index
-        
-        # Enable the save button after the first image
-        self.save_button.setEnabled(True)
-        
-        # Update save button text based on total images
-        if len(self.current_images) > 1:
-            self.save_button.setText("Save Images")
-        else:
-            self.save_button.setText("Save Image")
-
-    def show_next_image(self):
-        """Show the next image in the batch"""
-        if hasattr(self, 'current_image_index') and self.current_images:
-            next_index = min(self.current_image_index + 1, len(self.current_images) - 1)
-            self.current_image_index = next_index
-            self.display_image(next_index)
-    
-    def show_previous_image(self):
-        """Show the previous image in the batch"""
-        if hasattr(self, 'current_image_index') and self.current_images:
-            prev_index = max(self.current_image_index - 1, 0)
-            self.current_image_index = prev_index
-            self.display_image(prev_index)
-
-    def handle_error(self, error_message):
-        self.progress_bar.setVisible(False)
-        self.status_label.setText("Error occurred - Ready for new generation")
-        self.generate_button.setEnabled(True)
-        
-        # Show error in a dialog
-        QMessageBox.critical(
-            self,
-            "Error",
-            f"An error occurred during image generation:\n{error_message}"
-        )
-
-    def save_image(self):
-        if not self.current_images:
-            return
-        
-        if len(self.current_images) == 1:
-            # Single image save
-            file_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save Image",
-                "",
-                "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
-            )
-            
-            if file_path:
-                self.current_images[0].save(file_path)
-        else:
-            # Batch save - ask user what they want to do
-            options = QMessageBox.question(
-                self,
-                "Save Images",
-                "Do you want to save all images or just the currently displayed one?",
-                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Save
-            )
-            
-            if options == QMessageBox.StandardButton.Cancel:
-                return
-                
-            # Determine which images to save
-            images_to_save = [self.current_images[self.current_image_index]] if options == QMessageBox.StandardButton.Save else self.current_images
-            
-            # Get directory to save to
-            if len(images_to_save) > 1:
-                save_dir = QFileDialog.getExistingDirectory(
-                    self,
-                    "Select Directory to Save Images"
-                )
-                
-                if save_dir:
-                    # Generate base filename from prompt
-                    base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
-                    base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
-                    
-                    # Save each image with index and seed
-                    for i, image in enumerate(images_to_save):
-                        seed = self.generation_thread.generated_seeds[i] if hasattr(self.generation_thread, 'generated_seeds') and i < len(self.generation_thread.generated_seeds) else "unknown"
-                        file_path = os.path.join(save_dir, f"{base_name}_{i+1}_seed{seed}.png")
-                        image.save(file_path)
-                    
-                    self.status_label.setText(f"Saved {len(images_to_save)} images to {save_dir}")
-            else:
-                # Save single image
-                file_path, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "Save Image",
-                    "",
-                    "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
-                )
-                
-                if file_path:
-                    images_to_save[0].save(file_path)
-                    self.status_label.setText(f"Saved image to {file_path}")
-
-    def enhance_prompt(self):
-        """Use Ollama to enhance the prompt"""
-        if not self.enhance_input.text():
-            return
-            
-        # Disable the enhance button while processing
-        self.enhance_button.setEnabled(False)
-        self.status_label.setText("Enhancing prompt with Ollama...")
-        
-        # Get the selected model and mode
-        model = self.ollama_model_combo.currentText()
-        mode = "description" if self.description_radio.isChecked() else "tags"
-        
-        # Create and start the Ollama thread
-        self.ollama_thread = OllamaThread(
-            self.ollama_client,
-            model,
-            self.enhance_input.text(),
-            mode
-        )
-        
-        self.ollama_thread.finished.connect(self.handle_enhanced_prompt)
-        self.ollama_thread.error.connect(self.handle_ollama_error)
-        self.ollama_thread.start()
-    
-    def handle_enhanced_prompt(self, enhanced_prompt):
-        """Handle the enhanced prompt from Ollama"""
-        self.enhance_button.setEnabled(True)
-        self.status_label.setText("Prompt enhanced successfully")
-        
-        # Set the enhanced prompt as the main prompt
-        self.prompt_input.setText(enhanced_prompt)
-        
-        # Clear the enhance input
-        self.enhance_input.clear()
-    
-    def handle_ollama_error(self, error_message):
-        """Handle errors from Ollama"""
-        self.enhance_button.setEnabled(True)
-        self.status_label.setText("Error enhancing prompt")
-        
-        # Show error in a dialog
-        QMessageBox.warning(
-            self,
-            "Ollama Error",
-            f"An error occurred while enhancing the prompt:\n{error_message}"
-        )
-
-    def refresh_ollama_models(self):
-        """Refresh the list of Ollama models"""
-        # First check if Ollama is available now (may have been started after app launch)
-        ollama_available_now = self.ollama_client.is_available()
-        
-        # If Ollama wasn't available before but is now, we need to create the UI
-        if not self.ollama_available and ollama_available_now:
-            self.ollama_available = True
-            
-            # Find the input_layout (parent of the parameters_layout)
-            for i in range(self.centralWidget().layout().count()):
-                item = self.centralWidget().layout().itemAt(i)
-                if isinstance(item, QVBoxLayout) and item != self.centralWidget().layout():
-                    input_layout = item
-                    break
-            
-            # Create and add the Ollama UI
-            ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_layout = QVBoxLayout()
-            
-            # Model selection
-            ollama_model_layout = QHBoxLayout()
-            ollama_model_label = QLabel("Ollama Model:")
-            self.ollama_model_combo = QComboBox()
-            refresh_ollama_button = QPushButton("Refresh")
-            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
-            ollama_model_layout.addWidget(ollama_model_label)
-            ollama_model_layout.addWidget(self.ollama_model_combo)
-            ollama_model_layout.addWidget(refresh_ollama_button)
-            ollama_layout.addLayout(ollama_model_layout)
-            
-            # Input mode selection
-            input_mode_layout = QHBoxLayout()
-            self.description_radio = QRadioButton("Description to Tags")
-            self.tags_radio = QRadioButton("Enhance Tags")
-            self.tags_radio.setChecked(True)  # Default to tag enhancement
-            input_mode_layout.addWidget(self.description_radio)
-            input_mode_layout.addWidget(self.tags_radio)
-            ollama_layout.addLayout(input_mode_layout)
-            
-            # Enhance button and input for enhancement
-            enhance_layout = QHBoxLayout()
-            self.enhance_input = QLineEdit()
-            self.enhance_input.setPlaceholderText("Enter prompt to enhance")
-            self.enhance_button = QPushButton("Enhance Prompt")
-            self.enhance_button.clicked.connect(self.enhance_prompt)
-            enhance_layout.addWidget(self.enhance_input)
-            enhance_layout.addWidget(self.enhance_button)
-            ollama_layout.addLayout(enhance_layout)
-            
-            ollama_group.setLayout(ollama_layout)
-            input_layout.addWidget(ollama_group)
-            
-            # Get models
-            self.ollama_models = self.ollama_client.list_models()
-            self.ollama_model_combo.addItems(self.ollama_models)
-            
-            # Show a message
-            self.status_label.setText("Ollama connected successfully")
-            
-        elif self.ollama_available:
-            # If Ollama was already available, just refresh the model list
-            self.ollama_models = self.ollama_client.list_models()
-            current_model = self.ollama_model_combo.currentText()
-            
-            self.ollama_model_combo.clear()
-            self.ollama_model_combo.addItems(self.ollama_models)
-            
-            # Try to restore previous selection if it exists
-            index = self.ollama_model_combo.findText(current_model)
-            if index >= 0:
-                self.ollama_model_combo.setCurrentIndex(index)
-                
-            self.status_label.setText("Ollama models refreshed")
 
     def handle_image_ready(self, image, index, total):
         """Handle each image as it completes generation"""
