@@ -15,6 +15,7 @@ from huggingface_hub import scan_cache_dir, HfFolder, model_info
 import time
 import requests
 import json
+import random
 
 class OllamaClient:
     """
@@ -58,9 +59,9 @@ class OllamaClient:
         """
         try:
             if mode == "tags":
-                system_prompt = "You are a helpful assistant specialized in enhancing image generation prompts. The user will provide tags or keywords for an image. Respond ONLY with the original tags plus 3-5 additional very closely related tags that would improve the image generation. Focus on maintaining the exact same style and concept, just adding a few highly relevant terms. Do not include explanations in your response. Keep the style consistent with the original prompt."
+                system_prompt = "You are a helpful assistant specialized in enhancing image generation prompts. The user will provide tags or keywords for an image. Respond ONLY with the original tags plus 3-5 additional very closely related tags that would improve the image generation. Focus on maintaining the exact same style and concept, just adding a few highly relevant terms. Format all tags as a single comma-separated list. Do not include explanations or other text in your response. Keep the style consistent with the original prompt."
             else:  # description
-                system_prompt = "You are a helpful assistant specialized in converting descriptive text into image generation tags. The user will provide a description of an image. Respond only with a concise list of 5-10 essential tags/keywords that would help generate this image. Focus only on the most important visual elements in the description. Optimize the tags for image generation quality. Do not include explanations in your response."
+                system_prompt = "You are a helpful assistant specialized in converting descriptive text into image generation tags. The user will provide a description of an image. Respond only with a concise list of 5-10 essential tags/keywords that would help generate this image, separated by commas. Focus only on the most important visual elements in the description. Optimize the tags for image generation quality. Format your response as a simple comma-separated list with no other text or explanations."
             
             data = {
                 "model": model,
@@ -120,6 +121,20 @@ SDXL_RESOLUTION_PRESETS = {
     "1152x896 (Landscape)": (1152, 896),
     "832x1216 (Portrait)": (832, 1216),
     "1216x832 (Landscape)": (1216, 832),
+}
+
+# Available samplers
+SAMPLERS = {
+    "Euler a": "euler_ancestral",
+    "Euler": "euler",
+    "LMS": "lms",
+    "Heun": "heun",
+    "DPM2": "dpm_2",
+    "DPM2 a": "dpm_2_ancestral",
+    "DPM++ 2S a": "dpmpp_2s_ancestral",
+    "DPM++ 2M": "dpmpp_2m",
+    "DPM++ SDE": "dpmpp_sde",
+    "DDIM": "ddim"
 }
 
 # Define the available models
@@ -214,7 +229,7 @@ class GenerationThread(QThread):
     progress = pyqtSignal(int, str)  # Now includes status message
     error = pyqtSignal(str)
 
-    def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height):
+    def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height, seed=None, sampler=None):
         super().__init__()
         self.model_config = model_config
         self.prompt = prompt
@@ -223,6 +238,8 @@ class GenerationThread(QThread):
         self.guidance_scale = guidance_scale
         self.width = width
         self.height = height
+        self.seed = seed  # Random seed for generation (None = random)
+        self.sampler = sampler  # Sampler algorithm to use
         self.pipe = None
         self.download_tracker = None
 
@@ -299,6 +316,59 @@ class GenerationThread(QThread):
             print(f"Steps: {self.num_inference_steps}, Guidance: {self.guidance_scale}")
             print(f"Resolution: {self.width}x{self.height}")
             
+            # Set generator for reproducible results if seed is provided
+            if self.seed is not None:
+                generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                generator.manual_seed(self.seed)
+                print(f"Using seed: {self.seed}")
+            else:
+                generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                # Generate a seed that fits in a 32-bit integer to avoid overflow
+                random_seed = random.randint(0, 2147483647)
+                generator.manual_seed(random_seed)
+                self.seed = random_seed
+                print(f"Using random seed: {self.seed}")
+                
+            # Set the scheduler (sampler) if specified
+            if self.sampler and hasattr(self.pipe, "scheduler"):
+                try:
+                    # Import necessary samplers dynamically to avoid bloating the imports
+                    from diffusers import (
+                        DDIMScheduler, DPMSolverMultistepScheduler,
+                        EulerAncestralDiscreteScheduler, EulerDiscreteScheduler,
+                        LMSDiscreteScheduler, HeunDiscreteScheduler,
+                        KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler,
+                        DPMSolverSinglestepScheduler, DPMPPMSolverScheduler
+                    )
+                    
+                    # Map the sampler name to the appropriate scheduler class
+                    schedulers = {
+                        "ddim": DDIMScheduler,
+                        "dpmpp_2m": DPMSolverMultistepScheduler,
+                        "euler_ancestral": EulerAncestralDiscreteScheduler,
+                        "euler": EulerDiscreteScheduler,
+                        "lms": LMSDiscreteScheduler,
+                        "heun": HeunDiscreteScheduler,
+                        "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
+                        "dpm_2": KDPM2DiscreteScheduler,
+                        "dpmpp_2s_ancestral": DPMSolverSinglestepScheduler,
+                        "dpmpp_sde": DPMPPMSolverScheduler
+                    }
+                    
+                    if self.sampler in schedulers:
+                        print(f"Using sampler: {self.sampler}")
+                        # Get the config from the current scheduler
+                        old_config = self.pipe.scheduler.config
+                        # Create new scheduler with the same config
+                        new_scheduler = schedulers[self.sampler].from_config(old_config)
+                        # Replace the scheduler
+                        self.pipe.scheduler = new_scheduler
+                    else:
+                        print(f"Unknown sampler: {self.sampler}, using default")
+                except Exception as e:
+                    print(f"Error setting sampler: {str(e)}")
+                    print("Using default sampler")
+            
             with torch.inference_mode():
                 # Different models might have slightly different APIs
                 if isinstance(self.pipe, StableDiffusionXLPipeline):
@@ -310,7 +380,8 @@ class GenerationThread(QThread):
                         width=self.width,
                         height=self.height,
                         callback=self.progress_callback,
-                        callback_steps=1
+                        callback_steps=1,
+                        generator=generator
                     ).images[0]
                 elif isinstance(self.pipe, KandinskyV22Pipeline):
                     # Kandinsky has a different API
@@ -322,7 +393,8 @@ class GenerationThread(QThread):
                         width=self.width,
                         height=self.height,
                         callback=self.progress_callback,
-                        callback_steps=1
+                        callback_steps=1,
+                        generator=generator
                     ).images[0]
                 else:
                     # Standard StableDiffusion
@@ -334,7 +406,8 @@ class GenerationThread(QThread):
                         width=self.width,
                         height=self.height,
                         callback=self.progress_callback,
-                        callback_steps=1
+                        callback_steps=1,
+                        generator=generator
                     ).images[0]
 
             print("Generation completed successfully")
@@ -501,6 +574,33 @@ class MainWindow(QMainWindow):
         guidance_layout.addWidget(self.guidance_input)
         params_layout.addLayout(guidance_layout)
         
+        # Seed input
+        seed_layout = QVBoxLayout()
+        seed_label = QLabel("Seed:")
+        seed_control_layout = QHBoxLayout()
+        self.seed_input = QSpinBox()
+        self.seed_input.setRange(-1, 2147483647)  # Max int32 value
+        self.seed_input.setValue(-1)  # -1 means random seed
+        self.seed_input.setToolTip("Use -1 for random seed")
+        self.random_seed_button = QPushButton("🎲")  # Dice emoji for random
+        self.random_seed_button.setToolTip("Generate random seed")
+        self.random_seed_button.setMaximumWidth(30)
+        self.random_seed_button.clicked.connect(self.generate_random_seed)
+        seed_control_layout.addWidget(self.seed_input)
+        seed_control_layout.addWidget(self.random_seed_button)
+        seed_layout.addWidget(seed_label)
+        seed_layout.addLayout(seed_control_layout)
+        params_layout.addLayout(seed_layout)
+        
+        # Sampler selection
+        sampler_layout = QVBoxLayout()
+        sampler_label = QLabel("Sampler:")
+        self.sampler_combo = QComboBox()
+        self.sampler_combo.addItems(SAMPLERS.keys())
+        sampler_layout.addWidget(sampler_label)
+        sampler_layout.addWidget(self.sampler_combo)
+        params_layout.addLayout(sampler_layout)
+        
         input_layout.addLayout(params_layout)
         layout.addLayout(input_layout)
         
@@ -587,6 +687,11 @@ class MainWindow(QMainWindow):
         if index >= 0:
             self.resolution_combo.setCurrentIndex(index)
 
+    def generate_random_seed(self):
+        """Generate a random seed value"""
+        random_seed = random.randint(0, 2147483647)
+        self.seed_input.setValue(random_seed)
+        
     def generate_image(self):
         if not self.prompt_input.text():
             return
@@ -605,6 +710,18 @@ class MainWindow(QMainWindow):
         resolution_presets = model_config["resolution_presets"]
         width, height = resolution_presets[selected_resolution]
         
+        # Process seed value (-1 means random/None)
+        seed_value = self.seed_input.value()
+        if seed_value == -1:
+            seed_value = None
+            self.status_label.setText("Generating with random seed...")
+        else:
+            self.status_label.setText(f"Generating with seed: {seed_value}...")
+            
+        # Get selected sampler
+        sampler_name = self.sampler_combo.currentText()
+        sampler_id = SAMPLERS.get(sampler_name)
+        
         self.generation_thread = GenerationThread(
             model_config,
             self.prompt_input.text(),
@@ -612,7 +729,9 @@ class MainWindow(QMainWindow):
             self.steps_input.value(),
             self.guidance_input.value(),
             width,
-            height
+            height,
+            seed_value,
+            sampler_id
         )
         
         self.generation_thread.finished.connect(self.handle_generated_image)
@@ -634,6 +753,18 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Ready")
         self.generate_button.setEnabled(True)
         self.save_button.setEnabled(True)
+        
+        # Update the seed value if it was random so it can be reused
+        original_seed_setting = self.seed_input.value()
+        if self.generation_thread and self.generation_thread.seed is not None:
+            # If the user had specified a manual seed, show that seed
+            # If they had chosen random (-1), tell them what seed was used, then reset to -1
+            if original_seed_setting == -1:
+                # Show the used seed in the status label but keep the input as -1
+                self.status_label.setText(f"Image generated with seed: {self.generation_thread.seed}")
+            else:
+                # User specified a seed, so show it in the input
+                self.seed_input.setValue(self.generation_thread.seed)
         
         # Convert PIL image to QPixmap
         buffer = io.BytesIO()

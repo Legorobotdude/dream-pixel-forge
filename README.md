@@ -17,6 +17,8 @@ A modern GUI application for running multiple AI image generation models locally
 - Model-specific resolution presets
 - Save generated images in various formats
 - Prompt enhancement using local LLMs via Ollama
+- Seed control for reproducible results
+- Multiple sampler algorithms for different generation styles
 - GPU acceleration support (if available)
 - Real-time progress tracking
 - Clear feedback during model downloads
@@ -59,6 +61,13 @@ A modern GUI application for running multiple AI image generation models locally
 5. Adjust the generation parameters if needed:
    - Number of Steps: Higher values (30-50) generally produce better quality but take longer
    - Guidance Scale: Higher values (7.5-15) make the image more closely match the prompt
+   - Seed: Control the randomness of the generation
+     - Use -1 for a random seed each time
+     - Set a specific number for reproducible results
+     - The random dice button generates a new random seed
+   - Sampler: Select the algorithm used for the diffusion process
+     - Different samplers have different characteristics and speeds
+     - "Euler a" is a good default for most images
 6. Click "Generate Image" and wait for the result
 7. Use the "Save Image" button to save your generated image
 
