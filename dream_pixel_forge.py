@@ -403,6 +403,9 @@ class MainWindow(QMainWindow):
         if not is_model_downloaded(model_config["model_id"]):
             size_gb = model_config.get("size_gb", 4.0)
             self.status_label.setText(f"Note: {model_name} (~{size_gb:.1f}GB) will be downloaded on first use")
+        else:
+            # Reset status label if model is already downloaded
+            self.status_label.setText("Ready")
 
     def update_resolutions(self):
         """Update the resolution presets based on selected model"""
@@ -480,7 +483,7 @@ class MainWindow(QMainWindow):
 
     def handle_error(self, error_message):
         self.progress_bar.setVisible(False)
-        self.status_label.setText("Error occurred")
+        self.status_label.setText("Error occurred - Ready for new generation")
         self.generate_button.setEnabled(True)
         
         # Show error in a dialog
