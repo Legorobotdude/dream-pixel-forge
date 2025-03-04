@@ -11,6 +11,7 @@ A modern GUI application for running multiple AI image generation models locally
   - Stable Diffusion XL
   - Dreamlike Diffusion
   - Kandinsky 2.2
+  - Pony Diffusion V6 XL
 - Text-to-image generation with various models
 - Support for negative prompts
 - Adjustable generation parameters (steps and guidance scale)
@@ -93,6 +94,20 @@ Artistic model that creates dreamlike, surreal images.
 ### Kandinsky 2.2
 Russian alternative to SD with unique artistic style.
 
+### Pony Diffusion V6 XL
+Specialized model for creating stylized pony and anthro art with high quality outputs. This model uses the SDXL architecture and automatically applies quality-enhancing tags to prompts.
+
+**Special features:**
+- Optimal for generating My Little Pony style art, furry art, and anthro characters
+- Automatically applies quality boosting tags for better results
+- Uses CLIP skip feature for improved output quality
+- Based on SDXL, so needs 8+ GB VRAM for optimal performance
+
+**Recommended prompt tips:**
+- For MLP style: use "anthro pony" or "feral pony" in your prompt
+- For furry art: use "anthro [species]" in your prompt
+- You can use special source tags like "source_pony" or "source_furry" for better style control
+
 ## Ollama Prompt Enhancement
 
 DreamPixelForge supports prompt enhancement using local large language models via the Ollama project. This feature helps you:
@@ -139,6 +154,7 @@ Download sizes for each model:
 - Dreamlike Diffusion: ~4GB
 - Kandinsky 2.2: ~4.5GB
 - Stable Diffusion XL: ~6.5GB
+- Pony Diffusion V6 XL: ~7GB
 
 **Note:** Downloads happen only once per model. After downloading, the model will be loaded directly from your local cache.
 
@@ -157,8 +173,9 @@ Each model requires significant disk space:
 - Dreamlike Diffusion: ~4GB
 - Kandinsky 2.2: ~4-5GB
 - Stable Diffusion XL: ~6.5GB
+- Pony Diffusion V6 XL: ~7GB
 
-**Note:** You only need disk space for the models you actually use. The ~20GB total is only if you plan to use all models. Most users will only need 4-7GB for their preferred model.
+**Note:** You only need disk space for the models you actually use. The ~27GB total is only if you plan to use all models. Most users will only need 4-7GB for their preferred model.
 
 ### Managing the Cache
 

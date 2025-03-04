@@ -184,6 +184,15 @@ AVAILABLE_MODELS = {
         "description": "Russian alternative to SD with unique artistic style",
         "size_gb": 4.5
     },
+    "Pony Diffusion V6 XL": {
+        "model_id": "LyliaEngine/Pony_Diffusion_V6_XL",
+        "pipeline": StableDiffusionXLPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 8.0,
+        "description": "Specialized model for stylized pony and anthro art",
+        "size_gb": 7.0
+    },
 }
 
 def is_model_downloaded(model_id):
@@ -295,6 +304,19 @@ class GenerationThread(QThread):
                 model_id,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
+            
+            # Special handling for Pony Diffusion - Set clip_skip=2
+            if "pony" in model_id.lower() and hasattr(self.pipe, "text_encoder"):
+                print("Setting clip_skip=2 for Pony Diffusion model")
+                # For SDXL models with text_encoder and text_encoder_2
+                if hasattr(self.pipe, "text_encoder_2"):
+                    # Store only the penultimate layer's hidden states in both encoders
+                    self.pipe.text_encoder.config.clip_skip = 2
+                    self.pipe.text_encoder_2.config.clip_skip = 2
+                else:
+                    # For standard SD models with a single text encoder
+                    self.pipe.text_encoder.config.clip_skip = 2
+                print("Clip skip set to 2 for better results with Pony Diffusion")
             
             # Stop the download tracker if it's running
             if self.download_tracker:
@@ -689,7 +711,8 @@ class MainWindow(QMainWindow):
                 "The first time you use each model, it will be downloaded from Hugging Face.\n\n"
                 "This can take several minutes depending on your internet speed.\n\n"
                 "- Stable Diffusion models: ~4GB each\n"
-                "- Stable Diffusion XL: ~6.5GB\n\n"
+                "- Stable Diffusion XL: ~6.5GB\n"
+                "- Pony Diffusion V6 XL: ~7GB\n\n"
                 "Models are downloaded only once and cached for future use."
             )
 
@@ -762,6 +785,21 @@ class MainWindow(QMainWindow):
         sampler_name = self.sampler_combo.currentText()
         sampler_id = SAMPLERS.get(sampler_name)
         
+        # Special prompt handling for Pony Diffusion
+        prompt = self.prompt_input.text()
+        negative_prompt = self.neg_prompt_input.text()
+        
+        if "pony diffusion" in current_model.lower():
+            # Check if quality boosters are already in the prompt
+            if not any(booster in prompt.lower() for booster in ["score_9", "score_8_up"]):
+                # Add quality boosters as recommended for Pony Diffusion
+                quality_booster = "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
+                if prompt.strip():
+                    prompt = f"{quality_booster}, {prompt}"
+                else:
+                    prompt = quality_booster
+                self.status_label.setText("Added quality boosters for Pony Diffusion")
+        
         # Reset current images when starting a new generation
         batch_size = self.batch_input.value()
         self.current_images = [None] * batch_size
@@ -786,8 +824,8 @@ class MainWindow(QMainWindow):
         
         self.generation_thread = GenerationThread(
             model_config,
-            self.prompt_input.text(),
-            self.neg_prompt_input.text(),
+            prompt,
+            negative_prompt,
             self.steps_input.value(),
             self.guidance_input.value(),
             width,
