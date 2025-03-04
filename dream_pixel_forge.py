@@ -857,6 +857,9 @@ class MainWindow(QMainWindow):
         self.current_images = []
         self.generation_thread = None
         
+        # Initialize local models dropdown with auto-imported models
+        self.refresh_local_models()
+        
         # Check if first time use
         self.check_first_use()
 
@@ -1460,8 +1463,76 @@ def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
     model_files = []
     for ext in [".safetensors", ".ckpt"]:
-        model_files.extend(glob.glob(os.path.join(LOCAL_MODELS_DIR, f"*{ext}")))
+        pattern = os.path.join(LOCAL_MODELS_DIR, f"*{ext}")
+        found_files = glob.glob(pattern)
+        model_files.extend(found_files)
     return model_files
+
+def auto_import_local_models():
+    """
+    Automatically import models from the models directory
+    with special handling for Pony models to be imported as SDXL
+    """
+    model_files = scan_local_models()
+    
+    # Skip if no model files found
+    if not model_files:
+        return {"count": 0, "message": ""}
+    
+    imported_count = 0
+    pony_count = 0
+    imported_models = []
+    
+    for model_path in model_files:
+        # Skip already imported models
+        if any(model.file_path == model_path for model in LOCAL_MODELS.values()):
+            continue
+        
+        # Extract default name from the file path
+        default_name = os.path.splitext(os.path.basename(model_path))[0]
+        
+        # Determine model type - check for Pony models
+        filename_lower = default_name.lower()
+        if ("pony" in filename_lower or 
+            "ponyrealism" in filename_lower or 
+            "ponydiffusion" in filename_lower or
+            "pony_diffusion" in filename_lower or
+            "pony-diffusion" in filename_lower or
+            "mlp" in filename_lower):  # My Little Pony abbreviation
+            model_type = "Stable Diffusion XL"  # Set all Pony models as SDXL
+            pony_count += 1
+        else:
+            # Default to SD 1.5 for others
+            model_type = "Stable Diffusion 1.5"
+        
+        # Create model info and add to LOCAL_MODELS
+        model_info = LocalModelInfo(
+            name=default_name,
+            file_path=model_path,
+            model_type=model_type,
+            description=f"Auto-imported local model: {default_name} ({model_type})"
+        )
+        
+        LOCAL_MODELS[model_info.name] = model_info
+        imported_count += 1
+        imported_models.append(f"• {default_name} ({model_type})")
+    
+    # Show a message if models were imported
+    if imported_count > 0:
+        message = f"Auto-imported {imported_count} local models:\n\n"
+        message += "\n".join(imported_models)
+        
+        if pony_count > 0:
+            message += f"\n\n{pony_count} Pony models were automatically configured as SDXL."
+        
+        # Note: This needs to be shown after the QApplication is created, which is handled in the main block
+        imported_info = {
+            "count": imported_count, 
+            "message": message
+        }
+        return imported_info
+    
+    return {"count": 0, "message": ""}
 
 class AddLocalModelDialog(QDialog):
     """Dialog for adding a local model"""
@@ -1656,6 +1727,19 @@ class LocalModelsDialog(QDialog):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Auto-import local models on startup
+    import_result = auto_import_local_models()
+    
     window = MainWindow()
     window.show()
+    
+    # Show message about auto-imported models if any
+    if import_result and import_result["count"] > 0:
+        QMessageBox.information(
+            window,
+            "Models Auto-Imported",
+            import_result["message"]
+        )
+    
     sys.exit(app.exec()) 
