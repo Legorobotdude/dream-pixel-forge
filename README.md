@@ -98,18 +98,13 @@ Artistic model that creates dreamlike, surreal images.
 Russian alternative to SD with unique artistic style.
 
 ### Pony Diffusion V6 XL
-Specialized model for creating stylized pony and anthro art with high quality outputs. This model uses the SDXL architecture and automatically applies quality-enhancing tags to prompts.
+Specialized model for creating stylized art with high quality outputs. This model uses the SDXL architecture and automatically applies quality-enhancing tags to prompts.
 
 **Special features:**
-- Optimal for generating My Little Pony style art, furry art, and anthro characters
+- Optimal for generating stylized art
 - Automatically applies quality boosting tags for better results
 - Uses CLIP skip feature for improved output quality
 - Based on SDXL, so needs 8+ GB VRAM for optimal performance
-
-**Recommended prompt tips:**
-- For MLP style: use "anthro pony" or "feral pony" in your prompt
-- For furry art: use "anthro [species]" in your prompt
-- You can use special source tags like "source_pony" or "source_furry" for better style control
 
 ## Using Local Models
 

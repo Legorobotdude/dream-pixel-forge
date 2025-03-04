@@ -24,50 +24,6 @@ import glob
 LOCAL_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
 
-# Model base types for local models
-MODEL_TYPES = {
-    "Stable Diffusion 1.5": {
-        "pipeline": StableDiffusionPipeline,
-        "resolution_presets": RESOLUTION_PRESETS,
-        "supports_negative_prompt": True,
-        "default_guidance_scale": 7.5,
-    },
-    "Stable Diffusion 2.1": {
-        "pipeline": StableDiffusionPipeline,
-        "resolution_presets": RESOLUTION_PRESETS,
-        "supports_negative_prompt": True,
-        "default_guidance_scale": 7.5,
-    },
-    "Stable Diffusion XL": {
-        "pipeline": StableDiffusionXLPipeline,
-        "resolution_presets": SDXL_RESOLUTION_PRESETS,
-        "supports_negative_prompt": True,
-        "default_guidance_scale": 9.0,
-    }
-}
-
-class LocalModelInfo:
-    """Class to store information about a local model"""
-    def __init__(self, name, file_path, model_type="Stable Diffusion 1.5", description=""):
-        self.name = name
-        self.file_path = file_path
-        self.model_type = model_type
-        self.description = description or f"Local model: {name} ({model_type})"
-        
-    def get_config(self):
-        """Get model configuration compatible with AVAILABLE_MODELS"""
-        base_config = MODEL_TYPES[self.model_type].copy()
-        config = {
-            "model_id": self.file_path,  # Use file path as the ID
-            "description": self.description,
-            "is_local": True,  # Flag to identify this is a local model
-            **base_config
-        }
-        return config
-
-# Local model registry to store information about local models
-LOCAL_MODELS = {}  # Will be populated when local models are added
-
 class OllamaClient:
     """
     Client for interacting with the Ollama API to get available models and process prompts.
@@ -150,6 +106,9 @@ class OllamaThread(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+# Local model registry to store information about local models
+LOCAL_MODELS = {}  # Will be populated when local models are added
+
 # Default negative prompts that work well with SD v1.5
 DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, deformed, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits, mutated hands and fingers, poorly drawn hands, poorly drawn face, poorly drawn feet, poorly drawn legs, poorly drawn limbs, poorly drawn anatomy, wrong anatomy, incorrect anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits"
 
@@ -173,6 +132,47 @@ SDXL_RESOLUTION_PRESETS = {
     "832x1216 (Portrait)": (832, 1216),
     "1216x832 (Landscape)": (1216, 832),
 }
+
+# Model base types for local models
+MODEL_TYPES = {
+    "Stable Diffusion 1.5": {
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+    },
+    "Stable Diffusion 2.1": {
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+    },
+    "Stable Diffusion XL": {
+        "pipeline": StableDiffusionXLPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 9.0,
+    }
+}
+
+class LocalModelInfo:
+    """Class to store information about a local model"""
+    def __init__(self, name, file_path, model_type="Stable Diffusion 1.5", description=""):
+        self.name = name
+        self.file_path = file_path
+        self.model_type = model_type
+        self.description = description or f"Local model: {name} ({model_type})"
+        
+    def get_config(self):
+        """Get model configuration compatible with AVAILABLE_MODELS"""
+        base_config = MODEL_TYPES[self.model_type].copy()
+        config = {
+            "model_id": self.file_path,  # Use file path as the ID
+            "description": self.description,
+            "is_local": True,  # Flag to identify this is a local model
+            **base_config
+        }
+        return config
 
 # Available samplers
 SAMPLERS = {
