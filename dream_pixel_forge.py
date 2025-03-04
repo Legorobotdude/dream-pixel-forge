@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QSpinBox, QDoubleSpinBox, QProgressBar, QFileDialog,
                             QComboBox, QMessageBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline
 import torch
@@ -115,8 +115,13 @@ class DownloadTracker(QThread):
             self.progress.emit(f"Downloading model {self.model_id} (~{self.size_gb:.1f}GB)... This may take several minutes.")
             if elapsed > 10:
                 self.progress.emit(f"Still downloading {self.model_id}... (~{self.size_gb:.1f}GB, {elapsed:.0f}s elapsed)")
-            time.sleep(2)
             
+            # Allow the UI to process events for 2 seconds
+            for _ in range(20):  # 20 * 0.1 seconds = 2 seconds
+                if not self.running:
+                    break
+                time.sleep(0.1)
+                
     def stop(self):
         self.running = False
 
@@ -168,8 +173,12 @@ class GenerationThread(QThread):
                 self.download_tracker = DownloadTracker(model_id, size_gb)
                 self.download_tracker.progress.connect(lambda msg: self.progress.emit(0, msg))
                 self.download_tracker.start()
+                
+                # Give the tracker a moment to show its first message
+                time.sleep(0.5)
+                QApplication.processEvents()
             
-            # Initialize pipeline with safety checker
+            # Initialize pipeline
             print(f"Initializing pipeline for model: {model_id}")
             self.pipe = pipeline_class.from_pretrained(
                 model_id,
@@ -181,6 +190,10 @@ class GenerationThread(QThread):
                 self.download_tracker.stop()
                 self.download_tracker.wait()
                 self.download_tracker = None
+                
+                # Let the user know download has completed
+                self.progress.emit(0, f"Model {model_id} downloaded successfully! Moving to GPU...")
+                QApplication.processEvents()  # Make sure the message is displayed
             
             if torch.cuda.is_available():
                 self.progress.emit(0, "Moving model to GPU...")
@@ -457,8 +470,12 @@ class MainWindow(QMainWindow):
         self.generation_thread.start()
 
     def handle_progress(self, progress, status):
+        """Handle progress updates from the generation thread"""
         self.progress_bar.setValue(progress)
         self.status_label.setText(status)
+        
+        # Force the UI to refresh immediately, particularly important for download messages
+        QApplication.processEvents()
 
     def handle_generated_image(self, image):
         self.current_image = image
