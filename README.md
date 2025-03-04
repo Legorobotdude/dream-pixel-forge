@@ -14,6 +14,7 @@ A modern GUI application for running multiple AI image generation models locally
 - Text-to-image generation with various models
 - Support for negative prompts
 - Adjustable generation parameters (steps and guidance scale)
+- Batch image generation (generate up to 10 images at once)
 - Model-specific resolution presets
 - Save generated images in various formats
 - Prompt enhancement using local LLMs via Ollama
@@ -61,6 +62,7 @@ A modern GUI application for running multiple AI image generation models locally
 5. Adjust the generation parameters if needed:
    - Number of Steps: Higher values (30-50) generally produce better quality but take longer
    - Guidance Scale: Higher values (7.5-15) make the image more closely match the prompt
+   - Batch Size: Number of images to generate at once (1-10)
    - Seed: Control the randomness of the generation
      - Use -1 for a random seed each time
      - Set a specific number for reproducible results
@@ -68,8 +70,11 @@ A modern GUI application for running multiple AI image generation models locally
    - Sampler: Select the algorithm used for the diffusion process
      - Different samplers have different characteristics and speeds
      - "Euler a" is a good default for most images
-6. Click "Generate Image" and wait for the result
-7. Use the "Save Image" button to save your generated image
+6. Click "Generate Images" and wait for the result
+7. For batch generation:
+   - Use the "Previous" and "Next" buttons to navigate between generated images
+   - When saving, choose whether to save the current image or all images in the batch
+8. Use the "Save Image" button to save your generated image(s)
 
 ## Models
 

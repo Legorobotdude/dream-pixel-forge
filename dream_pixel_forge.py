@@ -225,11 +225,11 @@ class DownloadTracker(QThread):
         self.running = False
 
 class GenerationThread(QThread):
-    finished = pyqtSignal(Image.Image)
+    finished = pyqtSignal(list)  # Changed to emit a list of images
     progress = pyqtSignal(int, str)  # Now includes status message
     error = pyqtSignal(str)
 
-    def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height, seed=None, sampler=None):
+    def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height, seed=None, sampler=None, batch_size=1):
         super().__init__()
         self.model_config = model_config
         self.prompt = prompt
@@ -240,8 +240,10 @@ class GenerationThread(QThread):
         self.height = height
         self.seed = seed  # Random seed for generation (None = random)
         self.sampler = sampler  # Sampler algorithm to use
+        self.batch_size = batch_size  # Number of images to generate
         self.pipe = None
         self.download_tracker = None
+        self.generated_seeds = []  # Store seeds used for each image in the batch
 
     def progress_callback(self, step, timestep, latents):
         if step is not None:
@@ -309,109 +311,123 @@ class GenerationThread(QThread):
                     print(f"Could not enable memory efficient attention: {str(e)}")
                     print("Continuing without memory optimization...")
 
-            # Generate the image
-            self.progress.emit(0, "Starting generation...")
+            # Generate the images in batch
+            self.progress.emit(0, f"Starting generation of {self.batch_size} images...")
             print(f"Starting generation with prompt: {self.prompt}")
             print(f"Negative prompt: {self.negative_prompt}")
             print(f"Steps: {self.num_inference_steps}, Guidance: {self.guidance_scale}")
-            print(f"Resolution: {self.width}x{self.height}")
+            print(f"Resolution: {self.width}x{self.height}, Batch size: {self.batch_size}")
             
-            # Set generator for reproducible results if seed is provided
-            if self.seed is not None:
-                generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
-                generator.manual_seed(self.seed)
-                print(f"Using seed: {self.seed}")
-            else:
-                generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
-                # Generate a seed that fits in a 32-bit integer to avoid overflow
-                random_seed = random.randint(0, 2147483647)
-                generator.manual_seed(random_seed)
-                self.seed = random_seed
-                print(f"Using random seed: {self.seed}")
+            # Track seeds for each generated image
+            self.generated_seeds = []
+            generated_images = []
+            
+            for i in range(self.batch_size):
+                # Update progress for each image in the batch
+                self.progress.emit(int(i / self.batch_size * 100), f"Generating image {i+1} of {self.batch_size}...")
                 
-            # Set the scheduler (sampler) if specified
-            if self.sampler and hasattr(self.pipe, "scheduler"):
-                try:
-                    # Import necessary samplers dynamically to avoid bloating the imports
-                    from diffusers import (
-                        DDIMScheduler, DPMSolverMultistepScheduler,
-                        EulerAncestralDiscreteScheduler, EulerDiscreteScheduler,
-                        LMSDiscreteScheduler, HeunDiscreteScheduler,
-                        KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler,
-                        DPMSolverSinglestepScheduler, DPMPPMSolverScheduler
-                    )
-                    
-                    # Map the sampler name to the appropriate scheduler class
-                    schedulers = {
-                        "ddim": DDIMScheduler,
-                        "dpmpp_2m": DPMSolverMultistepScheduler,
-                        "euler_ancestral": EulerAncestralDiscreteScheduler,
-                        "euler": EulerDiscreteScheduler,
-                        "lms": LMSDiscreteScheduler,
-                        "heun": HeunDiscreteScheduler,
-                        "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
-                        "dpm_2": KDPM2DiscreteScheduler,
-                        "dpmpp_2s_ancestral": DPMSolverSinglestepScheduler,
-                        "dpmpp_sde": DPMPPMSolverScheduler
-                    }
-                    
-                    if self.sampler in schedulers:
-                        print(f"Using sampler: {self.sampler}")
-                        # Get the config from the current scheduler
-                        old_config = self.pipe.scheduler.config
-                        # Create new scheduler with the same config
-                        new_scheduler = schedulers[self.sampler].from_config(old_config)
-                        # Replace the scheduler
-                        self.pipe.scheduler = new_scheduler
-                    else:
-                        print(f"Unknown sampler: {self.sampler}, using default")
-                except Exception as e:
-                    print(f"Error setting sampler: {str(e)}")
-                    print("Using default sampler")
-            
-            with torch.inference_mode():
-                # Different models might have slightly different APIs
-                if isinstance(self.pipe, StableDiffusionXLPipeline):
-                    image = self.pipe(
-                        prompt=self.prompt,
-                        negative_prompt=self.negative_prompt,
-                        num_inference_steps=self.num_inference_steps,
-                        guidance_scale=self.guidance_scale,
-                        width=self.width,
-                        height=self.height,
-                        callback=self.progress_callback,
-                        callback_steps=1,
-                        generator=generator
-                    ).images[0]
-                elif isinstance(self.pipe, KandinskyV22Pipeline):
-                    # Kandinsky has a different API
-                    image = self.pipe(
-                        prompt=self.prompt,
-                        negative_prompt=self.negative_prompt,
-                        num_inference_steps=self.num_inference_steps,
-                        guidance_scale=self.guidance_scale,
-                        width=self.width,
-                        height=self.height,
-                        callback=self.progress_callback,
-                        callback_steps=1,
-                        generator=generator
-                    ).images[0]
+                # Set generator for reproducible results if seed is provided
+                if i == 0 and self.seed is not None:
+                    # For the first image, use the provided seed
+                    generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                    generator.manual_seed(self.seed)
+                    current_seed = self.seed
+                    print(f"Using seed for image {i+1}: {current_seed}")
                 else:
-                    # Standard StableDiffusion
-                    image = self.pipe(
-                        prompt=self.prompt,
-                        negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
-                        num_inference_steps=self.num_inference_steps,
-                        guidance_scale=self.guidance_scale,
-                        width=self.width,
-                        height=self.height,
-                        callback=self.progress_callback,
-                        callback_steps=1,
-                        generator=generator
-                    ).images[0]
+                    # For subsequent images or if no seed was provided, use random seeds
+                    generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                    # Generate a seed that fits in a 32-bit integer to avoid overflow
+                    random_seed = random.randint(0, 2147483647)
+                    generator.manual_seed(random_seed)
+                    current_seed = random_seed
+                    print(f"Using random seed for image {i+1}: {current_seed}")
+                
+                self.generated_seeds.append(current_seed)
+                
+                # Set the scheduler (sampler) if specified
+                if self.sampler and hasattr(self.pipe, "scheduler"):
+                    try:
+                        # Import necessary samplers dynamically to avoid bloating the imports
+                        from diffusers import (
+                            DDIMScheduler, DPMSolverMultistepScheduler,
+                            EulerAncestralDiscreteScheduler, EulerDiscreteScheduler,
+                            LMSDiscreteScheduler, HeunDiscreteScheduler,
+                            KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler,
+                            DPMSolverSinglestepScheduler
+                        )
+                        
+                        # Map the sampler name to the appropriate scheduler class
+                        schedulers = {
+                            "ddim": DDIMScheduler,
+                            "dpmpp_2m": DPMSolverMultistepScheduler,
+                            "euler_ancestral": EulerAncestralDiscreteScheduler,
+                            "euler": EulerDiscreteScheduler,
+                            "lms": LMSDiscreteScheduler,
+                            "heun": HeunDiscreteScheduler,
+                            "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
+                            "dpm_2": KDPM2DiscreteScheduler,
+                            "dpmpp_2s_ancestral": DPMSolverSinglestepScheduler
+                        }
+                        
+                        if self.sampler in schedulers:
+                            print(f"Using sampler: {self.sampler}")
+                            # Get the config from the current scheduler
+                            old_config = self.pipe.scheduler.config
+                            # Create new scheduler with the same config
+                            new_scheduler = schedulers[self.sampler].from_config(old_config)
+                            # Replace the scheduler
+                            self.pipe.scheduler = new_scheduler
+                        else:
+                            print(f"Unknown sampler: {self.sampler}, using default")
+                    except Exception as e:
+                        print(f"Error setting sampler: {str(e)}")
+                        print("Using default sampler")
+                
+                with torch.inference_mode():
+                    # Different models might have slightly different APIs
+                    if isinstance(self.pipe, StableDiffusionXLPipeline):
+                        image = self.pipe(
+                            prompt=self.prompt,
+                            negative_prompt=self.negative_prompt,
+                            num_inference_steps=self.num_inference_steps,
+                            guidance_scale=self.guidance_scale,
+                            width=self.width,
+                            height=self.height,
+                            callback=self.progress_callback,
+                            callback_steps=1,
+                            generator=generator
+                        ).images[0]
+                    elif isinstance(self.pipe, KandinskyV22Pipeline):
+                        # Kandinsky has a different API
+                        image = self.pipe(
+                            prompt=self.prompt,
+                            negative_prompt=self.negative_prompt,
+                            num_inference_steps=self.num_inference_steps,
+                            guidance_scale=self.guidance_scale,
+                            width=self.width,
+                            height=self.height,
+                            callback=self.progress_callback,
+                            callback_steps=1,
+                            generator=generator
+                        ).images[0]
+                    else:
+                        # Standard StableDiffusion
+                        image = self.pipe(
+                            prompt=self.prompt,
+                            negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
+                            num_inference_steps=self.num_inference_steps,
+                            guidance_scale=self.guidance_scale,
+                            width=self.width,
+                            height=self.height,
+                            callback=self.progress_callback,
+                            callback_steps=1,
+                            generator=generator
+                        ).images[0]
+                
+                generated_images.append(image)
 
-            print("Generation completed successfully")
-            self.finished.emit(image)
+            print(f"Generation of {self.batch_size} images completed successfully")
+            self.finished.emit(generated_images)
         except Exception as e:
             error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             print(error_msg)
@@ -601,11 +617,22 @@ class MainWindow(QMainWindow):
         sampler_layout.addWidget(self.sampler_combo)
         params_layout.addLayout(sampler_layout)
         
+        # Batch size
+        batch_layout = QVBoxLayout()
+        batch_label = QLabel("Batch Size:")
+        self.batch_input = QSpinBox()
+        self.batch_input.setRange(1, 10)  # Allow generating up to 10 images at once
+        self.batch_input.setValue(1)  # Default to single image
+        self.batch_input.setToolTip("Number of images to generate in one batch")
+        batch_layout.addWidget(batch_label)
+        batch_layout.addWidget(self.batch_input)
+        params_layout.addLayout(batch_layout)
+        
         input_layout.addLayout(params_layout)
         layout.addLayout(input_layout)
         
         # Generate button
-        self.generate_button = QPushButton("Generate Image")
+        self.generate_button = QPushButton("Generate Images")
         self.generate_button.clicked.connect(self.generate_image)
         layout.addWidget(self.generate_button)
         
@@ -627,13 +654,13 @@ class MainWindow(QMainWindow):
         self.image_label.setStyleSheet("border: 1px solid #ccc;")
         layout.addWidget(self.image_label)
         
-        # Save button
+        # Create save button
         self.save_button = QPushButton("Save Image")
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
         layout.addWidget(self.save_button)
         
-        self.current_image = None
+        self.current_images = []
         self.generation_thread = None
         
         # Check if first time use
@@ -731,10 +758,11 @@ class MainWindow(QMainWindow):
             width,
             height,
             seed_value,
-            sampler_id
+            sampler_id,
+            self.batch_input.value()
         )
         
-        self.generation_thread.finished.connect(self.handle_generated_image)
+        self.generation_thread.finished.connect(self.handle_generated_images)
         self.generation_thread.progress.connect(self.handle_progress)
         self.generation_thread.error.connect(self.handle_error)
         self.generation_thread.start()
@@ -747,28 +775,72 @@ class MainWindow(QMainWindow):
         # Force the UI to refresh immediately, particularly important for download messages
         QApplication.processEvents()
 
-    def handle_generated_image(self, image):
-        self.current_image = image
+    def handle_generated_images(self, images):
+        self.current_images = images
         self.progress_bar.setVisible(False)
-        self.status_label.setText("Ready")
+        self.status_label.setText(f"Generated {len(images)} images")
         self.generate_button.setEnabled(True)
         self.save_button.setEnabled(True)
         
-        # Update the seed value if it was random so it can be reused
-        original_seed_setting = self.seed_input.value()
-        if self.generation_thread and self.generation_thread.seed is not None:
-            # If the user had specified a manual seed, show that seed
-            # If they had chosen random (-1), tell them what seed was used, then reset to -1
-            if original_seed_setting == -1:
-                # Show the used seed in the status label but keep the input as -1
-                self.status_label.setText(f"Image generated with seed: {self.generation_thread.seed}")
-            else:
-                # User specified a seed, so show it in the input
-                self.seed_input.setValue(self.generation_thread.seed)
+        # Update save button text based on batch size
+        if len(images) > 1:
+            self.save_button.setText("Save Images")
+        else:
+            self.save_button.setText("Save Image")
+        
+        # Update the display to show first image
+        if images:
+            # Update the seed display
+            if self.generation_thread and self.generation_thread.generated_seeds:
+                seed_str = ", ".join(map(str, self.generation_thread.generated_seeds[:3]))
+                if len(self.generation_thread.generated_seeds) > 3:
+                    seed_str += f", ... ({len(self.generation_thread.generated_seeds)} total)"
+                self.status_label.setText(f"Generated {len(images)} images with seeds: {seed_str}")
+                
+                # If the user set a specific seed for the first image, show it in the input
+                original_seed_setting = self.seed_input.value()
+                if original_seed_setting != -1:
+                    # Keep the first seed in the input box, which was the user's specified seed
+                    self.seed_input.setValue(self.generation_thread.generated_seeds[0])
+            
+            # Show the first image
+            self.current_image_index = 0
+            self.display_image(0)
+            
+            # If we have multiple images, add next/prev buttons
+            if len(images) > 1 and not hasattr(self, 'image_nav_layout'):
+                # Create navigation buttons for browsing images
+                self.image_nav_layout = QHBoxLayout()
+                
+                self.prev_button = QPushButton("Previous")
+                self.prev_button.clicked.connect(self.show_previous_image)
+                self.prev_button.setEnabled(False)  # Disabled at first image
+                
+                self.image_counter_label = QLabel(f"Image 1/{len(images)}")
+                self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                
+                self.next_button = QPushButton("Next")
+                self.next_button.clicked.connect(self.show_next_image)
+                
+                self.image_nav_layout.addWidget(self.prev_button)
+                self.image_nav_layout.addWidget(self.image_counter_label)
+                self.image_nav_layout.addWidget(self.next_button)
+                
+                # Find the layout that contains the image label
+                layout = self.centralWidget().layout()
+                layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
+    
+    def display_image(self, index):
+        """Display an image from the batch at the specified index"""
+        if not self.current_images or index < 0 or index >= len(self.current_images):
+            return
+            
+        image = self.current_images[index]
         
         # Convert PIL image to QPixmap
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
+        buffer.seek(0)
         qimage = QImage.fromData(buffer.getvalue())
         pixmap = QPixmap.fromImage(qimage)
         
@@ -779,6 +851,26 @@ class MainWindow(QMainWindow):
             Qt.TransformationMode.SmoothTransformation
         )
         self.image_label.setPixmap(scaled_pixmap)
+        
+        # Update navigation controls if they exist
+        if hasattr(self, 'image_counter_label'):
+            self.image_counter_label.setText(f"Image {index + 1}/{len(self.current_images)}")
+            self.prev_button.setEnabled(index > 0)
+            self.next_button.setEnabled(index < len(self.current_images) - 1)
+    
+    def show_next_image(self):
+        """Show the next image in the batch"""
+        if hasattr(self, 'current_image_index') and self.current_images:
+            next_index = min(self.current_image_index + 1, len(self.current_images) - 1)
+            self.current_image_index = next_index
+            self.display_image(next_index)
+    
+    def show_previous_image(self):
+        """Show the previous image in the batch"""
+        if hasattr(self, 'current_image_index') and self.current_images:
+            prev_index = max(self.current_image_index - 1, 0)
+            self.current_image_index = prev_index
+            self.display_image(prev_index)
 
     def handle_error(self, error_message):
         self.progress_bar.setVisible(False)
@@ -793,19 +885,68 @@ class MainWindow(QMainWindow):
         )
 
     def save_image(self):
-        if not self.current_image:
+        if not self.current_images:
             return
-            
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Image",
-            "",
-            "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
-        )
         
-        if file_path:
-            self.current_image.save(file_path)
-    
+        if len(self.current_images) == 1:
+            # Single image save
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Image",
+                "",
+                "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
+            )
+            
+            if file_path:
+                self.current_images[0].save(file_path)
+        else:
+            # Batch save - ask user what they want to do
+            options = QMessageBox.question(
+                self,
+                "Save Images",
+                "Do you want to save all images or just the currently displayed one?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save
+            )
+            
+            if options == QMessageBox.StandardButton.Cancel:
+                return
+                
+            # Determine which images to save
+            images_to_save = [self.current_images[self.current_image_index]] if options == QMessageBox.StandardButton.Save else self.current_images
+            
+            # Get directory to save to
+            if len(images_to_save) > 1:
+                save_dir = QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Directory to Save Images"
+                )
+                
+                if save_dir:
+                    # Generate base filename from prompt
+                    base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
+                    base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
+                    
+                    # Save each image with index and seed
+                    for i, image in enumerate(images_to_save):
+                        seed = self.generation_thread.generated_seeds[i] if hasattr(self.generation_thread, 'generated_seeds') and i < len(self.generation_thread.generated_seeds) else "unknown"
+                        file_path = os.path.join(save_dir, f"{base_name}_{i+1}_seed{seed}.png")
+                        image.save(file_path)
+                    
+                    self.status_label.setText(f"Saved {len(images_to_save)} images to {save_dir}")
+            else:
+                # Save single image
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save Image",
+                    "",
+                    "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
+                )
+                
+                if file_path:
+                    images_to_save[0].save(file_path)
+                    self.status_label.setText(f"Saved image to {file_path}")
+
     def enhance_prompt(self):
         """Use Ollama to enhance the prompt"""
         if not self.enhance_input.text():
