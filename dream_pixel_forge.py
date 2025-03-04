@@ -1305,6 +1305,81 @@ class MainWindow(QMainWindow):
             f"An error occurred while enhancing the prompt:\n{error_message}"
         )
 
+    def save_image(self):
+        """Save the generated image(s)"""
+        if not self.current_images:
+            return
+        
+        if len(self.current_images) == 1:
+            # Single image save
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Image",
+                "",
+                "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
+            )
+            
+            if file_path:
+                self.current_images[0].save(file_path)
+                self.status_label.setText(f"Saved image to {file_path}")
+        else:
+            # Batch save - ask user what they want to do
+            options = QMessageBox.question(
+                self,
+                "Save Images",
+                "Do you want to save all images or just the currently displayed one?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save
+            )
+            
+            if options == QMessageBox.StandardButton.Cancel:
+                return
+                
+            # Determine which images to save
+            images_to_save = [self.current_images[self.current_image_index]] if options == QMessageBox.StandardButton.Save else self.current_images
+            
+            # Get directory to save to
+            if len(images_to_save) > 1:
+                save_dir = QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Directory to Save Images"
+                )
+                
+                if save_dir:
+                    # Generate base filename from prompt
+                    base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
+                    base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
+                    
+                    # Save each image with index and seed
+                    for i, image in enumerate(images_to_save):
+                        seed = self.generation_thread.generated_seeds[i] if hasattr(self.generation_thread, 'generated_seeds') and i < len(self.generation_thread.generated_seeds) else "unknown"
+                        file_path = os.path.join(save_dir, f"{base_name}_{i+1}_seed{seed}.png")
+                        image.save(file_path)
+                    
+                    self.status_label.setText(f"Saved {len(images_to_save)} images to {save_dir}")
+            else:
+                # Save single image
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save Image",
+                    "",
+                    "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*.*)"
+                )
+                
+                if file_path:
+                    images_to_save[0].save(file_path)
+                    self.status_label.setText(f"Saved image to {file_path}")
+        
+    def update_model_info_from_tabs(self):
+        """Update model info when switching between Hugging Face and Local models tabs"""
+        current_tab = self.model_tabs.currentIndex()
+        if current_tab == 0:  # Hugging Face tab
+            if self.model_combo.currentText():  # If there's a selected model
+                self.on_model_changed(self.model_combo.currentText())
+        else:  # Local models tab
+            if self.local_model_combo.currentText():  # If there's a selected model
+                self.on_local_model_changed(self.local_model_combo.currentText())
+
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
     model_files = []
