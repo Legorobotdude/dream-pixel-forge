@@ -227,6 +227,7 @@ class DownloadTracker(QThread):
 class GenerationThread(QThread):
     finished = pyqtSignal(list)  # Changed to emit a list of images
     progress = pyqtSignal(int, str)  # Now includes status message
+    image_ready = pyqtSignal(Image.Image, int, int)  # Emits (image, index, total)
     error = pyqtSignal(str)
 
     def __init__(self, model_config, prompt, negative_prompt, num_inference_steps, guidance_scale, width, height, seed=None, sampler=None, batch_size=1):
@@ -248,7 +249,14 @@ class GenerationThread(QThread):
     def progress_callback(self, step, timestep, latents):
         if step is not None:
             progress = int((step + 1) / self.num_inference_steps * 100)
-            status = f"Generating image... Step {step + 1}/{self.num_inference_steps}"
+            # Include the current image index in the batch in the status message
+            if self.batch_size > 1:
+                # We don't know which image we're generating in the callback, so use a class variable
+                if not hasattr(self, 'current_image_index'):
+                    self.current_image_index = 0
+                status = f"Generating image {self.current_image_index + 1}/{self.batch_size}... Step {step + 1}/{self.num_inference_steps}"
+            else:
+                status = f"Generating image... Step {step + 1}/{self.num_inference_steps}"
             self.progress.emit(progress, status)
 
     def run(self):
@@ -325,6 +333,9 @@ class GenerationThread(QThread):
             for i in range(self.batch_size):
                 # Update progress for each image in the batch
                 self.progress.emit(int(i / self.batch_size * 100), f"Generating image {i+1} of {self.batch_size}...")
+                
+                # Set the current image index for the progress callback
+                self.current_image_index = i
                 
                 # Set generator for reproducible results if seed is provided
                 if i == 0 and self.seed is not None:
@@ -425,6 +436,8 @@ class GenerationThread(QThread):
                         ).images[0]
                 
                 generated_images.append(image)
+                # Emit signal for UI update with each generated image
+                self.image_ready.emit(image, i, self.batch_size)
 
             print(f"Generation of {self.batch_size} images completed successfully")
             self.finished.emit(generated_images)
@@ -749,6 +762,28 @@ class MainWindow(QMainWindow):
         sampler_name = self.sampler_combo.currentText()
         sampler_id = SAMPLERS.get(sampler_name)
         
+        # Reset current images when starting a new generation
+        batch_size = self.batch_input.value()
+        self.current_images = [None] * batch_size
+        self.current_image_index = None  # Will be set when the first image is ready
+        
+        # Remove previous image navigation if it exists
+        if hasattr(self, 'image_nav_layout'):
+            # Get the layout containing the image navigation
+            layout = self.centralWidget().layout()
+            
+            # Remove the old navigation widgets
+            while self.image_nav_layout.count():
+                item = self.image_nav_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            # Remove the layout itself
+            layout.removeItem(self.image_nav_layout)
+            
+            # Delete the navigation layout attribute
+            delattr(self, 'image_nav_layout')
+        
         self.generation_thread = GenerationThread(
             model_config,
             self.prompt_input.text(),
@@ -759,11 +794,12 @@ class MainWindow(QMainWindow):
             height,
             seed_value,
             sampler_id,
-            self.batch_input.value()
+            batch_size
         )
         
         self.generation_thread.finished.connect(self.handle_generated_images)
         self.generation_thread.progress.connect(self.handle_progress)
+        self.generation_thread.image_ready.connect(self.handle_image_ready)
         self.generation_thread.error.connect(self.handle_error)
         self.generation_thread.start()
 
@@ -776,60 +812,35 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
     def handle_generated_images(self, images):
-        self.current_images = images
+        """Handle completion of all image generations"""
+        # All images are already stored in self.current_images and displayed via handle_image_ready
         self.progress_bar.setVisible(False)
-        self.status_label.setText(f"Generated {len(images)} images")
+        self.status_label.setText(f"Completed generating {len(images)} images")
         self.generate_button.setEnabled(True)
-        self.save_button.setEnabled(True)
         
-        # Update save button text based on batch size
-        if len(images) > 1:
-            self.save_button.setText("Save Images")
-        else:
-            self.save_button.setText("Save Image")
+        # Update the seed input value if the user specified a seed
+        original_seed_setting = self.seed_input.value()
+        if original_seed_setting != -1 and self.generation_thread and self.generation_thread.generated_seeds:
+            # Keep the first seed in the input box, which was the user's specified seed
+            self.seed_input.setValue(self.generation_thread.generated_seeds[0])
         
-        # Update the display to show first image
-        if images:
-            # Update the seed display
-            if self.generation_thread and self.generation_thread.generated_seeds:
-                seed_str = ", ".join(map(str, self.generation_thread.generated_seeds[:3]))
-                if len(self.generation_thread.generated_seeds) > 3:
-                    seed_str += f", ... ({len(self.generation_thread.generated_seeds)} total)"
-                self.status_label.setText(f"Generated {len(images)} images with seeds: {seed_str}")
-                
-                # If the user set a specific seed for the first image, show it in the input
-                original_seed_setting = self.seed_input.value()
-                if original_seed_setting != -1:
-                    # Keep the first seed in the input box, which was the user's specified seed
-                    self.seed_input.setValue(self.generation_thread.generated_seeds[0])
+        # Display a summary of the seeds used
+        if self.generation_thread and self.generation_thread.generated_seeds:
+            seed_str = ", ".join(map(str, self.generation_thread.generated_seeds[:3]))
+            if len(self.generation_thread.generated_seeds) > 3:
+                seed_str += f", ... ({len(self.generation_thread.generated_seeds)} total)"
+            self.status_label.setText(f"Completed generating {len(images)} images with seeds: {seed_str}")
+        
+        # Update navigation controls if they exist
+        if hasattr(self, 'image_counter_label') and self.current_image_index is not None:
+            # Make sure we're showing the most recent image
+            self.display_image(self.current_image_index)
             
-            # Show the first image
-            self.current_image_index = 0
-            self.display_image(0)
-            
-            # If we have multiple images, add next/prev buttons
-            if len(images) > 1 and not hasattr(self, 'image_nav_layout'):
-                # Create navigation buttons for browsing images
-                self.image_nav_layout = QHBoxLayout()
-                
-                self.prev_button = QPushButton("Previous")
-                self.prev_button.clicked.connect(self.show_previous_image)
-                self.prev_button.setEnabled(False)  # Disabled at first image
-                
-                self.image_counter_label = QLabel(f"Image 1/{len(images)}")
-                self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                
-                self.next_button = QPushButton("Next")
-                self.next_button.clicked.connect(self.show_next_image)
-                
-                self.image_nav_layout.addWidget(self.prev_button)
-                self.image_nav_layout.addWidget(self.image_counter_label)
-                self.image_nav_layout.addWidget(self.next_button)
-                
-                # Find the layout that contains the image label
-                layout = self.centralWidget().layout()
-                layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
-    
+            # Update navigation buttons
+            if len(images) > 1:
+                self.prev_button.setEnabled(self.current_image_index > 0)
+                self.next_button.setEnabled(self.current_image_index < len(images) - 1)
+
     def display_image(self, index):
         """Display an image from the batch at the specified index"""
         if not self.current_images or index < 0 or index >= len(self.current_images):
@@ -1069,6 +1080,62 @@ class MainWindow(QMainWindow):
                 self.ollama_model_combo.setCurrentIndex(index)
                 
             self.status_label.setText("Ollama models refreshed")
+
+    def handle_image_ready(self, image, index, total):
+        """Handle each image as it completes generation"""
+        # Store the image in the current_images list
+        if not hasattr(self, 'current_images') or self.current_images is None or len(self.current_images) != total:
+            self.current_images = [None] * total
+
+        # Add the image to the list at the correct index
+        self.current_images[index] = image
+        
+        # Update status label with progress
+        self.status_label.setText(f"Generated image {index+1}/{total} (seed: {self.generation_thread.generated_seeds[index]})")
+        
+        # Initialize UI for image browsing if needed
+        if total > 1 and not hasattr(self, 'image_nav_layout'):
+            # Create navigation buttons for browsing images
+            self.image_nav_layout = QHBoxLayout()
+            
+            self.prev_button = QPushButton("Previous")
+            self.prev_button.clicked.connect(self.show_previous_image)
+            self.prev_button.setEnabled(False)  # Disabled at first image
+            
+            self.image_counter_label = QLabel(f"Image {index+1}/{total}")
+            self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            self.next_button = QPushButton("Next")
+            self.next_button.clicked.connect(self.show_next_image)
+            self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
+            
+            self.image_nav_layout.addWidget(self.prev_button)
+            self.image_nav_layout.addWidget(self.image_counter_label)
+            self.image_nav_layout.addWidget(self.next_button)
+            
+            # Find the layout that contains the image label
+            layout = self.centralWidget().layout()
+            layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
+        elif hasattr(self, 'image_counter_label'):
+            # Update the counter if it already exists
+            self.image_counter_label.setText(f"Image {index+1}/{total}")
+            self.prev_button.setEnabled(index > 0)
+            self.next_button.setEnabled(index < total - 1)
+        
+        # Set the current image index
+        self.current_image_index = index
+        
+        # Display the image
+        self.display_image(index)
+        
+        # Enable the save button after the first image
+        self.save_button.setEnabled(True)
+        
+        # Update save button text based on total images
+        if total > 1:
+            self.save_button.setText("Save Images")
+        else:
+            self.save_button.setText("Save Image")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
