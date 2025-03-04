@@ -3,7 +3,7 @@ import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QSpinBox, QDoubleSpinBox, QProgressBar, QFileDialog,
-                            QComboBox, QMessageBox)
+                            QComboBox, QMessageBox, QGroupBox, QRadioButton)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline
@@ -13,6 +13,90 @@ import io
 import traceback
 from huggingface_hub import scan_cache_dir, HfFolder, model_info
 import time
+import requests
+import json
+
+class OllamaClient:
+    """
+    Client for interacting with the Ollama API to get available models and process prompts.
+    """
+    def __init__(self, base_url="http://localhost:11434"):
+        self.base_url = base_url
+        
+    def list_models(self):
+        """Get list of models available in Ollama"""
+        try:
+            response = requests.get(f"{self.base_url}/api/tags")
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                return [model["name"] for model in models]
+            else:
+                return []
+        except Exception as e:
+            print(f"Error getting Ollama models: {str(e)}")
+            return []
+            
+    def is_available(self):
+        """Check if Ollama is available"""
+        try:
+            response = requests.get(f"{self.base_url}/api/tags")
+            return response.status_code == 200
+        except:
+            return False
+            
+    def enhance_prompt(self, model, prompt, mode="tags"):
+        """
+        Enhance a prompt using an Ollama model.
+        
+        Args:
+            model: The Ollama model to use
+            prompt: The user's prompt
+            mode: "tags" or "description" - determines the system prompt
+            
+        Returns:
+            Enhanced prompt as a string
+        """
+        try:
+            if mode == "tags":
+                system_prompt = "You are a helpful assistant specialized in enhancing image generation prompts. The user will provide tags or keywords for an image. Respond ONLY with the original tags plus 3-5 additional very closely related tags that would improve the image generation. Focus on maintaining the exact same style and concept, just adding a few highly relevant terms. Do not include explanations in your response. Keep the style consistent with the original prompt."
+            else:  # description
+                system_prompt = "You are a helpful assistant specialized in converting descriptive text into image generation tags. The user will provide a description of an image. Respond only with a concise list of 5-10 essential tags/keywords that would help generate this image. Focus only on the most important visual elements in the description. Optimize the tags for image generation quality. Do not include explanations in your response."
+            
+            data = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": False
+            }
+            
+            response = requests.post(f"{self.base_url}/api/chat", json=data)
+            if response.status_code == 200:
+                return response.json().get("message", {}).get("content", "")
+            else:
+                return f"Error: {response.status_code}"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+class OllamaThread(QThread):
+    """Thread for Ollama operations to keep UI responsive"""
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+    
+    def __init__(self, client, model, prompt, mode):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.prompt = prompt
+        self.mode = mode
+        
+    def run(self):
+        try:
+            result = self.client.enhance_prompt(self.model, self.prompt, self.mode)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
 
 # Default negative prompts that work well with SD v1.5
 DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, poor quality, distorted, deformed, disfigured, poorly drawn face, poorly drawn hands, poorly drawn feet, poorly drawn legs, deformed, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits, mutated hands and fingers, poorly drawn hands, poorly drawn face, poorly drawn feet, poorly drawn legs, poorly drawn limbs, poorly drawn anatomy, wrong anatomy, incorrect anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, ugly, disgusting, bad proportions, gross proportions, duplicate, morbid, mutilated, extra fingers, fused fingers, too many fingers, long neck, bad composition, bad perspective, bad lighting, watermark, signature, text, logo, banner, extra digits"
@@ -281,6 +365,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
+        # Initialize Ollama client
+        self.ollama_client = OllamaClient()
+        self.ollama_available = self.ollama_client.is_available()
+        self.ollama_models = []
+        if self.ollama_available:
+            self.ollama_models = self.ollama_client.list_models()
+        self.ollama_thread = None
+        
         # Create input section
         input_layout = QVBoxLayout()
         
@@ -316,6 +408,65 @@ class MainWindow(QMainWindow):
         neg_prompt_layout.addWidget(neg_prompt_label)
         neg_prompt_layout.addWidget(self.neg_prompt_input)
         input_layout.addLayout(neg_prompt_layout)
+        
+        # Ollama prompt enhancement section
+        if self.ollama_available and self.ollama_models:
+            ollama_group = QGroupBox("Ollama Prompt Enhancement")
+            ollama_layout = QVBoxLayout()
+            
+            # Model selection
+            ollama_model_layout = QHBoxLayout()
+            ollama_model_label = QLabel("Ollama Model:")
+            self.ollama_model_combo = QComboBox()
+            self.ollama_model_combo.addItems(self.ollama_models)
+            refresh_ollama_button = QPushButton("Refresh")
+            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
+            ollama_model_layout.addWidget(ollama_model_label)
+            ollama_model_layout.addWidget(self.ollama_model_combo)
+            ollama_model_layout.addWidget(refresh_ollama_button)
+            ollama_layout.addLayout(ollama_model_layout)
+            
+            # Input mode selection
+            input_mode_layout = QHBoxLayout()
+            self.description_radio = QRadioButton("Description to Tags")
+            self.tags_radio = QRadioButton("Enhance Tags")
+            self.tags_radio.setChecked(True)  # Default to tag enhancement
+            input_mode_layout.addWidget(self.description_radio)
+            input_mode_layout.addWidget(self.tags_radio)
+            ollama_layout.addLayout(input_mode_layout)
+            
+            # Enhance button and input for enhancement
+            enhance_layout = QHBoxLayout()
+            self.enhance_input = QLineEdit()
+            self.enhance_input.setPlaceholderText("Enter prompt to enhance")
+            self.enhance_button = QPushButton("Enhance Prompt")
+            self.enhance_button.clicked.connect(self.enhance_prompt)
+            enhance_layout.addWidget(self.enhance_input)
+            enhance_layout.addWidget(self.enhance_button)
+            ollama_layout.addLayout(enhance_layout)
+            
+            ollama_group.setLayout(ollama_layout)
+            input_layout.addWidget(ollama_group)
+        else:
+            # Show a message when Ollama is not available
+            ollama_group = QGroupBox("Ollama Prompt Enhancement")
+            ollama_layout = QVBoxLayout()
+            
+            if not self.ollama_available:
+                ollama_status = QLabel("Ollama is not running or not installed. Start Ollama to enable prompt enhancement.")
+                ollama_status.setWordWrap(True)
+            else:
+                ollama_status = QLabel("No Ollama models found. Install models through Ollama to enable prompt enhancement.")
+                ollama_status.setWordWrap(True)
+                
+            check_ollama_button = QPushButton("Check Ollama")
+            check_ollama_button.clicked.connect(self.refresh_ollama_models)
+            
+            ollama_layout.addWidget(ollama_status)
+            ollama_layout.addWidget(check_ollama_button)
+            
+            ollama_group.setLayout(ollama_layout)
+            input_layout.addWidget(ollama_group)
         
         # Parameters section
         params_layout = QHBoxLayout()
@@ -523,6 +674,129 @@ class MainWindow(QMainWindow):
         
         if file_path:
             self.current_image.save(file_path)
+    
+    def enhance_prompt(self):
+        """Use Ollama to enhance the prompt"""
+        if not self.enhance_input.text():
+            return
+            
+        # Disable the enhance button while processing
+        self.enhance_button.setEnabled(False)
+        self.status_label.setText("Enhancing prompt with Ollama...")
+        
+        # Get the selected model and mode
+        model = self.ollama_model_combo.currentText()
+        mode = "description" if self.description_radio.isChecked() else "tags"
+        
+        # Create and start the Ollama thread
+        self.ollama_thread = OllamaThread(
+            self.ollama_client,
+            model,
+            self.enhance_input.text(),
+            mode
+        )
+        
+        self.ollama_thread.finished.connect(self.handle_enhanced_prompt)
+        self.ollama_thread.error.connect(self.handle_ollama_error)
+        self.ollama_thread.start()
+    
+    def handle_enhanced_prompt(self, enhanced_prompt):
+        """Handle the enhanced prompt from Ollama"""
+        self.enhance_button.setEnabled(True)
+        self.status_label.setText("Prompt enhanced successfully")
+        
+        # Set the enhanced prompt as the main prompt
+        self.prompt_input.setText(enhanced_prompt)
+        
+        # Clear the enhance input
+        self.enhance_input.clear()
+    
+    def handle_ollama_error(self, error_message):
+        """Handle errors from Ollama"""
+        self.enhance_button.setEnabled(True)
+        self.status_label.setText("Error enhancing prompt")
+        
+        # Show error in a dialog
+        QMessageBox.warning(
+            self,
+            "Ollama Error",
+            f"An error occurred while enhancing the prompt:\n{error_message}"
+        )
+
+    def refresh_ollama_models(self):
+        """Refresh the list of Ollama models"""
+        # First check if Ollama is available now (may have been started after app launch)
+        ollama_available_now = self.ollama_client.is_available()
+        
+        # If Ollama wasn't available before but is now, we need to create the UI
+        if not self.ollama_available and ollama_available_now:
+            self.ollama_available = True
+            
+            # Find the input_layout (parent of the parameters_layout)
+            for i in range(self.centralWidget().layout().count()):
+                item = self.centralWidget().layout().itemAt(i)
+                if isinstance(item, QVBoxLayout) and item != self.centralWidget().layout():
+                    input_layout = item
+                    break
+            
+            # Create and add the Ollama UI
+            ollama_group = QGroupBox("Ollama Prompt Enhancement")
+            ollama_layout = QVBoxLayout()
+            
+            # Model selection
+            ollama_model_layout = QHBoxLayout()
+            ollama_model_label = QLabel("Ollama Model:")
+            self.ollama_model_combo = QComboBox()
+            refresh_ollama_button = QPushButton("Refresh")
+            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
+            ollama_model_layout.addWidget(ollama_model_label)
+            ollama_model_layout.addWidget(self.ollama_model_combo)
+            ollama_model_layout.addWidget(refresh_ollama_button)
+            ollama_layout.addLayout(ollama_model_layout)
+            
+            # Input mode selection
+            input_mode_layout = QHBoxLayout()
+            self.description_radio = QRadioButton("Description to Tags")
+            self.tags_radio = QRadioButton("Enhance Tags")
+            self.tags_radio.setChecked(True)  # Default to tag enhancement
+            input_mode_layout.addWidget(self.description_radio)
+            input_mode_layout.addWidget(self.tags_radio)
+            ollama_layout.addLayout(input_mode_layout)
+            
+            # Enhance button and input for enhancement
+            enhance_layout = QHBoxLayout()
+            self.enhance_input = QLineEdit()
+            self.enhance_input.setPlaceholderText("Enter prompt to enhance")
+            self.enhance_button = QPushButton("Enhance Prompt")
+            self.enhance_button.clicked.connect(self.enhance_prompt)
+            enhance_layout.addWidget(self.enhance_input)
+            enhance_layout.addWidget(self.enhance_button)
+            ollama_layout.addLayout(enhance_layout)
+            
+            ollama_group.setLayout(ollama_layout)
+            input_layout.addWidget(ollama_group)
+            
+            # Get models
+            self.ollama_models = self.ollama_client.list_models()
+            self.ollama_model_combo.addItems(self.ollama_models)
+            
+            # Show a message
+            self.status_label.setText("Ollama connected successfully")
+            
+        elif self.ollama_available:
+            # If Ollama was already available, just refresh the model list
+            self.ollama_models = self.ollama_client.list_models()
+            current_model = self.ollama_model_combo.currentText()
+            
+            self.ollama_model_combo.clear()
+            self.ollama_model_combo.addItems(self.ollama_models)
+            
+            # Try to restore previous selection if it exists
+            index = self.ollama_model_combo.findText(current_model)
+            if index >= 0:
+                self.ollama_model_combo.setCurrentIndex(index)
+                
+            self.status_label.setText("Ollama models refreshed")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -16,6 +16,7 @@ A modern GUI application for running multiple AI image generation models locally
 - Adjustable generation parameters (steps and guidance scale)
 - Model-specific resolution presets
 - Save generated images in various formats
+- Prompt enhancement using local LLMs via Ollama
 - GPU acceleration support (if available)
 - Real-time progress tracking
 - Clear feedback during model downloads
@@ -77,6 +78,39 @@ Artistic model that creates dreamlike, surreal images.
 
 ### Kandinsky 2.2
 Russian alternative to SD with unique artistic style.
+
+## Ollama Prompt Enhancement
+
+DreamPixelForge supports prompt enhancement using local large language models via the Ollama project. This feature helps you:
+
+1. Convert descriptive sentences into a concise set of 5-10 optimized image generation tags
+2. Enhance existing tags with 3-5 additional very closely related keywords that improve your results while maintaining the original style and concept
+
+### Requirements for Ollama Integration
+
+- [Ollama](https://ollama.ai/) installed and running on your machine
+- At least one language model installed through Ollama
+
+### Setting up Ollama
+
+1. Download and install Ollama from [ollama.ai](https://ollama.ai/)
+2. Run Ollama according to the instructions for your operating system
+3. Pull a language model using the Ollama command:
+   ```bash
+   ollama pull llama2
+   ```
+
+### Using Prompt Enhancement
+
+1. Choose an Ollama model from the dropdown
+2. Select the input type:
+   - **Description to Tags**: Enter a full description of what you want to see
+   - **Enhance Tags**: Enter existing tags/keywords to expand them
+3. Type your prompt in the enhancement field
+4. Click "Enhance Prompt" to process it through the selected LLM
+5. The enhanced prompt will be placed in the main prompt field, ready for image generation
+
+**Note:** You need to start Ollama separately before using this feature. If Ollama is not detected, a message will be shown with an option to check for availability.
 
 ## Model Downloads and First Use
 
