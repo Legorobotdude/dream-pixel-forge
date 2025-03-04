@@ -24,6 +24,7 @@ A modern GUI application for running multiple AI image generation models locally
 - GPU acceleration support (if available)
 - Real-time progress tracking
 - Clear feedback during model downloads
+- Support for local models from Civitai and other sources
 
 ## Requirements
 
@@ -57,7 +58,9 @@ A modern GUI application for running multiple AI image generation models locally
    ```bash
    python dream_pixel_forge.py
    ```
-2. Select the model you want to use from the dropdown menu
+2. Select the model you want to use:
+   - Choose from the "Hugging Face Models" tab for pre-configured models
+   - Or select from the "Local Models" tab for your own custom models
 3. Enter your prompt in the text field
 4. (Optional) Enter a negative prompt to specify what you don't want in the image
 5. Adjust the generation parameters if needed:
@@ -107,6 +110,38 @@ Specialized model for creating stylized pony and anthro art with high quality ou
 - For MLP style: use "anthro pony" or "feral pony" in your prompt
 - For furry art: use "anthro [species]" in your prompt
 - You can use special source tags like "source_pony" or "source_furry" for better style control
+
+## Using Local Models
+
+DreamPixelForge supports loading custom models from Civitai and other sources. These models should be in `.safetensors` or `.ckpt` format.
+
+### Adding Local Models
+
+1. There are two ways to add local models:
+   - **Direct import**: Place `.safetensors` or `.ckpt` files in the `models` folder in the application directory and use "Import from Models Folder"
+   - **Manual selection**: Use the "Add Model" button to select a model file from anywhere on your system
+
+2. When adding a model, you'll need to provide:
+   - **Model Name**: A name to identify the model in the UI
+   - **Model Type**: The base model architecture (SD 1.5, SD 2.1, SDXL)
+   - **Model File**: The path to the `.safetensors` or `.ckpt` file
+   - **Description**: (Optional) A description of the model
+
+3. After adding a model, it will appear in the "Local Models" tab
+
+### Using Local Models
+
+1. Switch to the "Local Models" tab
+2. Select your model from the dropdown list
+3. The appropriate resolution presets will be loaded based on the model type you specified
+4. Generate images as you would with built-in models
+
+### Managing Local Models
+
+Use the "Manage Models" button to:
+- Add new models
+- Import models from the models folder
+- Remove models from the registry (this doesn't delete the model files)
 
 ## Ollama Prompt Enhancement
 

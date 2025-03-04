@@ -3,9 +3,11 @@ import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QSpinBox, QDoubleSpinBox, QProgressBar, QFileDialog,
-                            QComboBox, QMessageBox, QGroupBox, QRadioButton)
+                            QComboBox, QMessageBox, QGroupBox, QRadioButton, 
+                            QTabWidget, QListWidget, QListWidgetItem, QDialog,
+                            QFormLayout)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtGui import QPixmap, QImage, QAction
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline
 import torch
 from PIL import Image
@@ -16,6 +18,55 @@ import time
 import requests
 import json
 import random
+import glob
+
+# Local models directory
+LOCAL_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
+
+# Model base types for local models
+MODEL_TYPES = {
+    "Stable Diffusion 1.5": {
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+    },
+    "Stable Diffusion 2.1": {
+        "pipeline": StableDiffusionPipeline,
+        "resolution_presets": RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 7.5,
+    },
+    "Stable Diffusion XL": {
+        "pipeline": StableDiffusionXLPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,
+        "supports_negative_prompt": True,
+        "default_guidance_scale": 9.0,
+    }
+}
+
+class LocalModelInfo:
+    """Class to store information about a local model"""
+    def __init__(self, name, file_path, model_type="Stable Diffusion 1.5", description=""):
+        self.name = name
+        self.file_path = file_path
+        self.model_type = model_type
+        self.description = description or f"Local model: {name} ({model_type})"
+        
+    def get_config(self):
+        """Get model configuration compatible with AVAILABLE_MODELS"""
+        base_config = MODEL_TYPES[self.model_type].copy()
+        config = {
+            "model_id": self.file_path,  # Use file path as the ID
+            "description": self.description,
+            "is_local": True,  # Flag to identify this is a local model
+            **base_config
+        }
+        return config
+
+# Local model registry to store information about local models
+LOCAL_MODELS = {}  # Will be populated when local models are added
 
 class OllamaClient:
     """
@@ -190,7 +241,7 @@ AVAILABLE_MODELS = {
         "resolution_presets": SDXL_RESOLUTION_PRESETS,
         "supports_negative_prompt": True,
         "default_guidance_scale": 8.0,
-        "description": "Specialized model for stylized pony and anthro art",
+        "description": "Specialized model for stylized art",
         "size_gb": 7.0
     },
 }
@@ -300,10 +351,37 @@ class GenerationThread(QThread):
             
             # Initialize pipeline
             print(f"Initializing pipeline for model: {model_id}")
-            self.pipe = pipeline_class.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-            )
+            
+            # Check if this is a local model
+            is_local = self.model_config.get("is_local", False)
+            
+            if is_local and os.path.exists(model_id) and model_id.endswith((".safetensors", ".ckpt")):
+                print(f"Loading local model from: {model_id}")
+                self.progress.emit(0, f"Loading local model from: {os.path.basename(model_id)}...")
+                
+                try:
+                    # Load from single file (used for Civitai models)
+                    self.pipe = pipeline_class.from_single_file(
+                        model_id,
+                        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                    )
+                    print("Local model loaded successfully")
+                except Exception as e:
+                    error_msg = f"Error loading local model: {str(e)}"
+                    print(error_msg)
+                    # Try the regular from_pretrained as a fallback
+                    print("Trying alternative loading method...")
+                    self.pipe = pipeline_class.from_pretrained(
+                        model_id,
+                        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                        local_files_only=True
+                    )
+            else:
+                # Load remote model from Hugging Face Hub
+                self.pipe = pipeline_class.from_pretrained(
+                    model_id,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                )
             
             # Special handling for Pony Diffusion - Set clip_skip=2
             if "pony" in model_id.lower() and hasattr(self.pipe, "text_encoder"):
@@ -484,6 +562,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DreamPixelForge - Text to Image")
         self.setMinimumSize(800, 600)
         
+        # Create menu bar
+        self.create_menu()
+        
         # Create main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -503,16 +584,43 @@ class MainWindow(QMainWindow):
         # Model selection
         model_layout = QHBoxLayout()
         model_label = QLabel("Model:")
+        
+        # Create a tabbed interface for model selection
+        self.model_tabs = QTabWidget()
+        
+        # Hugging Face models tab
+        hf_tab = QWidget()
+        hf_layout = QVBoxLayout(hf_tab)
         self.model_combo = QComboBox()
         self.model_combo.addItems(AVAILABLE_MODELS.keys())
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        hf_layout.addWidget(self.model_combo)
+        self.model_tabs.addTab(hf_tab, "Hugging Face Models")
+        
+        # Local models tab
+        local_tab = QWidget()
+        local_layout = QVBoxLayout(local_tab)
+        self.local_model_combo = QComboBox()
+        self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
+        
+        local_buttons_layout = QHBoxLayout()
+        manage_models_btn = QPushButton("Manage Models")
+        manage_models_btn.clicked.connect(self.open_manage_models)
+        local_buttons_layout.addWidget(self.local_model_combo)
+        local_buttons_layout.addWidget(manage_models_btn)
+        
+        local_layout.addLayout(local_buttons_layout)
+        self.model_tabs.addTab(local_tab, "Local Models")
+        
+        # Connect tab change to update model info
+        self.model_tabs.currentChanged.connect(self.update_model_info_from_tabs)
         
         # Add a model info label
         self.model_info = QLabel(AVAILABLE_MODELS["Stable Diffusion 1.5"]["description"])
         self.model_info.setWordWrap(True)
         
         model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_combo)
+        model_layout.addWidget(self.model_tabs)
         input_layout.addLayout(model_layout)
         input_layout.addWidget(self.model_info)
         
@@ -701,6 +809,81 @@ class MainWindow(QMainWindow):
         # Check if first time use
         self.check_first_use()
 
+    def create_menu(self):
+        """Create the menu bar"""
+        # Create menu bar
+        menu_bar = self.menuBar()
+        
+        # File menu
+        file_menu = menu_bar.addMenu("File")
+        
+        # Import model action
+        import_model_action = QAction("Import Model", self)
+        import_model_action.triggered.connect(self.import_model)
+        file_menu.addAction(import_model_action)
+        
+        # Manage models action
+        manage_models_action = QAction("Manage Models", self)
+        manage_models_action.triggered.connect(self.open_manage_models)
+        file_menu.addAction(manage_models_action)
+        
+        # Separator
+        file_menu.addSeparator()
+        
+        # Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Models menu
+        models_menu = menu_bar.addMenu("Models")
+        
+        # Open models folder action
+        open_folder_action = QAction("Open Models Folder", self)
+        open_folder_action.triggered.connect(self.open_models_folder)
+        models_menu.addAction(open_folder_action)
+    
+    def import_model(self):
+        """Open dialog to import a model file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Select Model File", 
+            "", 
+            "Model Files (*.safetensors *.ckpt)"
+        )
+        
+        if file_path:
+            dialog = AddLocalModelDialog(self, file_path)
+            if dialog.exec():
+                model_info = dialog.get_model_info()
+                if model_info:
+                    LOCAL_MODELS[model_info.name] = model_info
+                    self.refresh_local_models()
+                    
+                    # Switch to the local models tab
+                    self.model_tabs.setCurrentIndex(1)
+                    
+                    # Select the newly added model
+                    index = self.local_model_combo.findText(model_info.name)
+                    if index >= 0:
+                        self.local_model_combo.setCurrentIndex(index)
+    
+    def open_models_folder(self):
+        """Open the models folder in the file explorer"""
+        import subprocess
+        import os
+        
+        # Create the folder if it doesn't exist
+        os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
+        
+        # Open the folder in the default file explorer
+        if sys.platform == "win32":
+            os.startfile(LOCAL_MODELS_DIR)
+        elif sys.platform == "darwin":
+            subprocess.call(["open", LOCAL_MODELS_DIR])
+        else:
+            subprocess.call(["xdg-open", LOCAL_MODELS_DIR])
+
     def check_first_use(self):
         """Show a message if this is the first use about model downloads"""
         model_id = AVAILABLE_MODELS["Stable Diffusion 1.5"]["model_id"]
@@ -737,18 +920,8 @@ class MainWindow(QMainWindow):
     def update_resolutions(self):
         """Update the resolution presets based on selected model"""
         current_model = self.model_combo.currentText()
-        resolution_presets = AVAILABLE_MODELS[current_model]["resolution_presets"]
-        
-        # Remember current selection if possible
-        current_selection = self.resolution_combo.currentText()
-        
-        self.resolution_combo.clear()
-        self.resolution_combo.addItems(resolution_presets.keys())
-        
-        # Try to restore previous selection if it exists in the new list
-        index = self.resolution_combo.findText(current_selection)
-        if index >= 0:
-            self.resolution_combo.setCurrentIndex(index)
+        model_config = AVAILABLE_MODELS[current_model]
+        self.update_resolutions_from_config(model_config)
 
     def generate_random_seed(self):
         """Generate a random seed value"""
@@ -764,9 +937,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.status_label.setText("Initializing...")
         
-        # Get current model configuration
-        current_model = self.model_combo.currentText()
-        model_config = AVAILABLE_MODELS[current_model]
+        # Get current model configuration based on active tab
+        current_tab = self.model_tabs.currentIndex()
+        if current_tab == 0:  # Hugging Face tab
+            current_model = self.model_combo.currentText()
+            model_config = AVAILABLE_MODELS[current_model]
+        else:  # Local models tab
+            current_model = self.local_model_combo.currentText()
+            if not current_model or current_model not in LOCAL_MODELS:
+                self.status_label.setText("No local model selected.")
+                self.generate_button.setEnabled(True)
+                self.progress_bar.setVisible(False)
+                return
+            
+            model_config = LOCAL_MODELS[current_model].get_config()
         
         # Get selected resolution
         selected_resolution = self.resolution_combo.currentText()
@@ -789,7 +973,7 @@ class MainWindow(QMainWindow):
         prompt = self.prompt_input.text()
         negative_prompt = self.neg_prompt_input.text()
         
-        if "pony diffusion" in current_model.lower():
+        if current_tab == 0 and "pony diffusion" in current_model.lower():
             # Check if quality boosters are already in the prompt
             if not any(booster in prompt.lower() for booster in ["score_9", "score_8_up"]):
                 # Add quality boosters as recommended for Pony Diffusion
@@ -906,7 +1090,22 @@ class MainWindow(QMainWindow):
             self.image_counter_label.setText(f"Image {index + 1}/{len(self.current_images)}")
             self.prev_button.setEnabled(index > 0)
             self.next_button.setEnabled(index < len(self.current_images) - 1)
-    
+        
+        # Set the current image index
+        self.current_image_index = index
+        
+        # Display the image
+        self.display_image(index)
+        
+        # Enable the save button after the first image
+        self.save_button.setEnabled(True)
+        
+        # Update save button text based on total images
+        if len(self.current_images) > 1:
+            self.save_button.setText("Save Images")
+        else:
+            self.save_button.setText("Save Image")
+
     def show_next_image(self):
         """Show the next image in the batch"""
         if hasattr(self, 'current_image_index') and self.current_images:
@@ -1174,6 +1373,273 @@ class MainWindow(QMainWindow):
             self.save_button.setText("Save Images")
         else:
             self.save_button.setText("Save Image")
+
+    def on_local_model_changed(self, model_name):
+        """Handle change in local model selection"""
+        if not model_name or model_name not in LOCAL_MODELS:
+            return
+
+        model_info = LOCAL_MODELS[model_name]
+        config = model_info.get_config()
+        
+        self.model_info.setText(config["description"])
+        self.guidance_input.setValue(config["default_guidance_scale"])
+        
+        # Update resolution presets based on model type
+        self.update_resolutions_from_config(config)
+        
+        # Enable/disable negative prompt based on model support
+        self.neg_prompt_input.setEnabled(config["supports_negative_prompt"])
+    
+    def update_resolutions_from_config(self, model_config):
+        """Update the resolution presets based on provided configuration"""
+        resolution_presets = model_config["resolution_presets"]
+        
+        # Remember current selection if possible
+        current_selection = self.resolution_combo.currentText()
+        
+        self.resolution_combo.clear()
+        self.resolution_combo.addItems(resolution_presets.keys())
+        
+        # Try to restore previous selection if it exists in the new list
+        index = self.resolution_combo.findText(current_selection)
+        if index >= 0:
+            self.resolution_combo.setCurrentIndex(index)
+
+    def open_manage_models(self):
+        """Open the local models dialog"""
+        dialog = LocalModelsDialog(self)
+        dialog.models_updated.connect(self.refresh_local_models)
+        dialog.exec()
+
+    def refresh_local_models(self):
+        """Refresh the list of local models in the UI"""
+        selected_model = self.local_model_combo.currentText()
+        
+        self.local_model_combo.clear()
+        
+        if LOCAL_MODELS:
+            self.local_model_combo.addItems(LOCAL_MODELS.keys())
+            
+            # Try to restore previous selection
+            if selected_model in LOCAL_MODELS:
+                index = self.local_model_combo.findText(selected_model)
+                if index >= 0:
+                    self.local_model_combo.setCurrentIndex(index)
+            
+            # Update the current model info
+            if self.local_model_combo.currentText():
+                self.on_local_model_changed(self.local_model_combo.currentText())
+        else:
+            self.model_info.setText("No local models available. Use 'Manage Models' to add one.")
+
+    def update_model_info_from_tabs(self):
+        """Update model info when switching between Hugging Face and Local models tabs"""
+        current_tab = self.model_tabs.currentIndex()
+        if current_tab == 0:  # Hugging Face tab
+            if self.model_combo.currentText():  # If there's a selected model
+                self.on_model_changed(self.model_combo.currentText())
+        else:  # Local models tab
+            if self.local_model_combo.currentText():  # If there's a selected model
+                self.on_local_model_changed(self.local_model_combo.currentText())
+
+def scan_local_models():
+    """Scan the models directory for safetensors and ckpt files"""
+    model_files = []
+    for ext in [".safetensors", ".ckpt"]:
+        model_files.extend(glob.glob(os.path.join(LOCAL_MODELS_DIR, f"*{ext}")))
+    return model_files
+
+class AddLocalModelDialog(QDialog):
+    """Dialog for adding a local model"""
+    def __init__(self, parent=None, model_path=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Local Model")
+        self.setMinimumWidth(500)
+        
+        layout = QVBoxLayout(self)
+        
+        form = QFormLayout()
+        
+        # Model name field
+        self.name_input = QLineEdit()
+        if model_path:
+            # Extract a default name from the file path
+            default_name = os.path.splitext(os.path.basename(model_path))[0]
+            self.name_input.setText(default_name)
+        form.addRow("Model Name:", self.name_input)
+        
+        # Model type selection
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(MODEL_TYPES.keys())
+        form.addRow("Model Type:", self.model_type_combo)
+        
+        # Model path field
+        self.path_layout = QHBoxLayout()
+        self.path_input = QLineEdit()
+        self.path_input.setReadOnly(True)
+        if model_path:
+            self.path_input.setText(model_path)
+        self.browse_button = QPushButton("Browse")
+        self.browse_button.clicked.connect(self.browse_model)
+        self.path_layout.addWidget(self.path_input)
+        self.path_layout.addWidget(self.browse_button)
+        form.addRow("Model File:", self.path_layout)
+        
+        # Description field
+        self.description_input = QLineEdit()
+        form.addRow("Description:", self.description_input)
+        
+        layout.addLayout(form)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        self.add_button = QPushButton("Add Model")
+        self.add_button.clicked.connect(self.accept)
+        button_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.add_button)
+        
+        layout.addLayout(button_layout)
+    
+    def browse_model(self):
+        """Open file dialog to select model file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Select Model File", 
+            LOCAL_MODELS_DIR, 
+            "Model Files (*.safetensors *.ckpt)"
+        )
+        
+        if file_path:
+            self.path_input.setText(file_path)
+            # Extract a default name if none set
+            if not self.name_input.text():
+                default_name = os.path.splitext(os.path.basename(file_path))[0]
+                self.name_input.setText(default_name)
+    
+    def get_model_info(self):
+        """Get the model info from dialog fields"""
+        if not self.path_input.text() or not self.name_input.text():
+            return None
+            
+        return LocalModelInfo(
+            name=self.name_input.text(),
+            file_path=self.path_input.text(),
+            model_type=self.model_type_combo.currentText(),
+            description=self.description_input.text()
+        )
+
+class LocalModelsDialog(QDialog):
+    """Dialog for managing local models"""
+    models_updated = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Local Models")
+        self.setMinimumSize(700, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Models list
+        self.models_list = QListWidget()
+        self.models_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        layout.addWidget(self.models_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.add_button = QPushButton("Add Model")
+        self.add_button.clicked.connect(self.add_model)
+        
+        self.import_button = QPushButton("Import from Models Folder")
+        self.import_button.clicked.connect(self.import_models)
+        
+        self.remove_button = QPushButton("Remove")
+        self.remove_button.clicked.connect(self.remove_model)
+        
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        
+        button_layout.addWidget(self.add_button)
+        button_layout.addWidget(self.import_button)
+        button_layout.addWidget(self.remove_button)
+        button_layout.addWidget(self.close_button)
+        
+        layout.addLayout(button_layout)
+        
+        # Load models
+        self.refresh_models_list()
+    
+    def refresh_models_list(self):
+        """Refresh the list of models"""
+        self.models_list.clear()
+        
+        for name, model_info in LOCAL_MODELS.items():
+            item = QListWidgetItem(f"{name} ({model_info.model_type})")
+            item.setToolTip(f"Path: {model_info.file_path}\nDescription: {model_info.description}")
+            self.models_list.addItem(item)
+    
+    def add_model(self):
+        """Open dialog to add a new model"""
+        dialog = AddLocalModelDialog(self)
+        if dialog.exec():
+            model_info = dialog.get_model_info()
+            if model_info:
+                LOCAL_MODELS[model_info.name] = model_info
+                self.refresh_models_list()
+                self.models_updated.emit()
+    
+    def import_models(self):
+        """Import models from the models directory"""
+        model_files = scan_local_models()
+        
+        if not model_files:
+            QMessageBox.information(
+                self,
+                "No Models Found",
+                f"No model files found in {LOCAL_MODELS_DIR}.\n\n"
+                "Please place your .safetensors or .ckpt files in this folder."
+            )
+            return
+            
+        for model_path in model_files:
+            # Skip already imported models
+            if any(model.file_path == model_path for model in LOCAL_MODELS.values()):
+                continue
+                
+            dialog = AddLocalModelDialog(self, model_path)
+            if dialog.exec():
+                model_info = dialog.get_model_info()
+                if model_info:
+                    LOCAL_MODELS[model_info.name] = model_info
+        
+        self.refresh_models_list()
+        self.models_updated.emit()
+    
+    def remove_model(self):
+        """Remove selected model from registry"""
+        selected_items = self.models_list.selectedItems()
+        if not selected_items:
+            return
+            
+        item = selected_items[0]
+        model_name = item.text().split(" (")[0]
+        
+        if model_name in LOCAL_MODELS:
+            confirmation = QMessageBox.question(
+                self,
+                "Confirm Removal",
+                f"Remove {model_name} from the registry?\n\n"
+                "This will only remove the model from the list, not delete the file.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if confirmation == QMessageBox.StandardButton.Yes:
+                del LOCAL_MODELS[model_name]
+                self.refresh_models_list()
+                self.models_updated.emit()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
