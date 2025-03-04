@@ -1171,7 +1171,82 @@ class MainWindow(QMainWindow):
                 self.on_local_model_changed(self.local_model_combo.currentText())
         else:
             self.model_info.setText("No local models available. Use 'Manage Models' to add one.")
-
+            
+    def refresh_ollama_models(self):
+        """Refresh the list of Ollama models"""
+        # Check if Ollama is available now (may have been started after app launch)
+        ollama_available_now = self.ollama_client.is_available()
+        
+        # If Ollama wasn't available before but is now, we need to create the UI
+        if not self.ollama_available and ollama_available_now:
+            self.ollama_available = True
+            
+            # Find the input_layout (parent of the parameters_layout)
+            for i in range(self.centralWidget().layout().count()):
+                item = self.centralWidget().layout().itemAt(i)
+                if isinstance(item, QVBoxLayout) and item != self.centralWidget().layout():
+                    input_layout = item
+                    break
+            
+            # Create and add the Ollama UI
+            ollama_group = QGroupBox("Ollama Prompt Enhancement")
+            ollama_layout = QVBoxLayout()
+            
+            # Model selection
+            ollama_model_layout = QHBoxLayout()
+            ollama_model_label = QLabel("Ollama Model:")
+            self.ollama_model_combo = QComboBox()
+            refresh_ollama_button = QPushButton("Refresh")
+            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
+            ollama_model_layout.addWidget(ollama_model_label)
+            ollama_model_layout.addWidget(self.ollama_model_combo)
+            ollama_model_layout.addWidget(refresh_ollama_button)
+            ollama_layout.addLayout(ollama_model_layout)
+            
+            # Input mode selection
+            input_mode_layout = QHBoxLayout()
+            self.description_radio = QRadioButton("Description to Tags")
+            self.tags_radio = QRadioButton("Enhance Tags")
+            self.tags_radio.setChecked(True)  # Default to tag enhancement
+            input_mode_layout.addWidget(self.description_radio)
+            input_mode_layout.addWidget(self.tags_radio)
+            ollama_layout.addLayout(input_mode_layout)
+            
+            # Enhance button and input for enhancement
+            enhance_layout = QHBoxLayout()
+            self.enhance_input = QLineEdit()
+            self.enhance_input.setPlaceholderText("Enter prompt to enhance")
+            self.enhance_button = QPushButton("Enhance Prompt")
+            self.enhance_button.clicked.connect(self.enhance_prompt)
+            enhance_layout.addWidget(self.enhance_input)
+            enhance_layout.addWidget(self.enhance_button)
+            ollama_layout.addLayout(enhance_layout)
+            
+            ollama_group.setLayout(ollama_layout)
+            input_layout.addWidget(ollama_group)
+            
+            # Get models
+            self.ollama_models = self.ollama_client.list_models()
+            self.ollama_model_combo.addItems(self.ollama_models)
+            
+            # Show a message
+            self.status_label.setText("Ollama connected successfully")
+            
+        elif self.ollama_available:
+            # If Ollama was already available, just refresh the model list
+            self.ollama_models = self.ollama_client.list_models()
+            current_model = self.ollama_model_combo.currentText()
+            
+            self.ollama_model_combo.clear()
+            self.ollama_model_combo.addItems(self.ollama_models)
+            
+            # Try to restore previous selection if it exists
+            index = self.ollama_model_combo.findText(current_model)
+            if index >= 0:
+                self.ollama_model_combo.setCurrentIndex(index)
+                
+            self.status_label.setText("Ollama models refreshed")
+    
     def update_model_info_from_tabs(self):
         """Update model info when switching between Hugging Face and Local models tabs"""
         current_tab = self.model_tabs.currentIndex()
@@ -1181,6 +1256,54 @@ class MainWindow(QMainWindow):
         else:  # Local models tab
             if self.local_model_combo.currentText():  # If there's a selected model
                 self.on_local_model_changed(self.local_model_combo.currentText())
+
+    def enhance_prompt(self):
+        """Use Ollama to enhance the prompt"""
+        if not self.enhance_input.text():
+            return
+            
+        # Disable the enhance button while processing
+        self.enhance_button.setEnabled(False)
+        self.status_label.setText("Enhancing prompt with Ollama...")
+        
+        # Get the selected model and mode
+        model = self.ollama_model_combo.currentText()
+        mode = "description" if self.description_radio.isChecked() else "tags"
+        
+        # Create and start the Ollama thread
+        self.ollama_thread = OllamaThread(
+            self.ollama_client,
+            model,
+            self.enhance_input.text(),
+            mode
+        )
+        
+        self.ollama_thread.finished.connect(self.handle_enhanced_prompt)
+        self.ollama_thread.error.connect(self.handle_ollama_error)
+        self.ollama_thread.start()
+    
+    def handle_enhanced_prompt(self, enhanced_prompt):
+        """Handle the enhanced prompt from Ollama"""
+        self.enhance_button.setEnabled(True)
+        self.status_label.setText("Prompt enhanced successfully")
+        
+        # Set the enhanced prompt as the main prompt
+        self.prompt_input.setText(enhanced_prompt)
+        
+        # Clear the enhance input
+        self.enhance_input.clear()
+    
+    def handle_ollama_error(self, error_message):
+        """Handle errors from Ollama"""
+        self.enhance_button.setEnabled(True)
+        self.status_label.setText("Error enhancing prompt")
+        
+        # Show error in a dialog
+        QMessageBox.warning(
+            self,
+            "Ollama Error",
+            f"An error occurred while enhancing the prompt:\n{error_message}"
+        )
 
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
