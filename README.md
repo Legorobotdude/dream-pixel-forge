@@ -24,6 +24,7 @@ A modern GUI application for running multiple AI image generation models locally
 - Python 3.8 or higher
 - CUDA-capable GPU (recommended, 8+ GB VRAM for SDXL)
 - At least 8GB of RAM (16GB recommended)
+- 4-7GB free disk space per model (~20GB for all models)
 
 ## Installation
 
@@ -75,6 +76,44 @@ Artistic model that creates dreamlike, surreal images.
 
 ### Kandinsky 2.2
 Russian alternative to SD with unique artistic style.
+
+## Model Storage and Cache Management
+
+Models are downloaded automatically by the Hugging Face Diffusers library when first used and stored in a cache directory:
+
+- **Windows**: `C:\Users\<YOUR_USERNAME>\.cache\huggingface\hub`
+- **macOS**: `/Users/<YOUR_USERNAME>/.cache/huggingface/hub`
+- **Linux**: `/home/<YOUR_USERNAME>/.cache/huggingface/hub`
+
+### Disk Space Requirements
+
+Each model requires significant disk space:
+- Stable Diffusion 1.5/2.1: ~4GB each
+- Dreamlike Diffusion: ~4GB
+- Kandinsky 2.2: ~4-5GB
+- Stable Diffusion XL: ~6.5GB
+
+**Note:** You only need disk space for the models you actually use. The ~20GB total is only if you plan to use all models. Most users will only need 4-7GB for their preferred model.
+
+### Managing the Cache
+
+You can manage the model cache in several ways:
+
+1. **Clear the cache** - You can safely delete the cache directory if you need to free up space. Models will be re-downloaded when needed.
+
+2. **Custom cache location** - Set a custom cache directory by setting the `HF_HOME` environment variable before running the application:
+
+   ```bash
+   # Windows (PowerShell)
+   $env:HF_HOME = "D:\custom_model_cache"
+   python dream_pixel_forge.py
+
+   # Linux/macOS
+   export HF_HOME="/path/to/custom_model_cache"
+   python dream_pixel_forge.py
+   ```
+
+3. **One-time downloads** - Models are only downloaded once, so subsequent runs will be faster.
 
 ## Development
 
