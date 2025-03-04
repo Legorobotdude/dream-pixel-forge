@@ -1,0 +1,51 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# PyQt generated files
+*.pyc
+*.pyo
+
+# Model files and caches
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+.cache/
+huggingface/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Generated images
+output/
+generated/
+*.png
+*.jpg
+*.jpeg
+
+# OS specific
+.DS_Store
+Thumbs.db 
