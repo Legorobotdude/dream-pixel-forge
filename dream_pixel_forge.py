@@ -116,7 +116,7 @@ class GenerationThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Image Studio - Stable Diffusion")
+        self.setWindowTitle("DreamPixelForge - Stable Diffusion")
         self.setMinimumSize(800, 600)
         
         # Create main widget and layout

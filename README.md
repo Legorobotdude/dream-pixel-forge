@@ -1,6 +1,6 @@
-# Image Studio
+# DreamPixelForge
 
-A modern GUI application for running Stable Diffusion locally on your machine.
+A modern GUI application for running Stable Diffusion locally on your machine, transforming your text prompts into stunning images.
 
 ## Features
 
@@ -23,8 +23,8 @@ A modern GUI application for running Stable Diffusion locally on your machine.
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/image-studio.git
-   cd image-studio
+   git clone https://github.com/yourusername/dream-pixel-forge.git
+   cd dream-pixel-forge
    ```
 
 2. Create a virtual environment (recommended):
@@ -42,7 +42,7 @@ A modern GUI application for running Stable Diffusion locally on your machine.
 
 1. Run the application:
    ```bash
-   python image_studio.py
+   python dream_pixel_forge.py
    ```
 2. Enter your prompt in the text field
 3. (Optional) Enter a negative prompt to specify what you don't want in the image
