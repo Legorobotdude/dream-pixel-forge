@@ -1056,7 +1056,50 @@ class MainWindow(QMainWindow):
             
             # Delete the navigation layout attribute
             delattr(self, 'image_nav_layout')
+            
+        # Create and start the generation thread
+        self.generation_thread = GenerationThread(
+            model_config=model_config,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            num_inference_steps=self.steps_input.value(),
+            guidance_scale=self.guidance_input.value(),
+            width=width,
+            height=height,
+            seed=seed_value,
+            sampler=sampler_id,
+            batch_size=batch_size
+        )
+        
+        # Connect signals
+        self.generation_thread.progress.connect(self.handle_progress)
+        self.generation_thread.image_ready.connect(self.handle_image_ready)
+        self.generation_thread.error.connect(self.handle_error)
+        self.generation_thread.finished.connect(self.handle_generation_finished)
+        
+        # Start the thread
+        self.generation_thread.start()
 
+    def handle_progress(self, progress, message):
+        """Handle progress updates from generation thread"""
+        self.progress_bar.setValue(progress)
+        self.status_label.setText(message)
+        
+    def handle_error(self, error_message):
+        """Handle errors from generation thread"""
+        self.status_label.setText("Error: Generation failed")
+        self.generate_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        
+        # Show error message in dialog
+        QMessageBox.critical(self, "Generation Error", error_message)
+        
+    def handle_generation_finished(self, images):
+        """Handle completion of generation thread"""
+        self.generate_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.status_label.setText("Generation complete!")
+        
     def handle_image_ready(self, image, index, total):
         """Handle each image as it completes generation"""
         # Store the image in the current_images list
@@ -1112,6 +1155,49 @@ class MainWindow(QMainWindow):
             self.save_button.setText("Save Images")
         else:
             self.save_button.setText("Save Image")
+
+    def display_image(self, index):
+        """Display the image at the specified index"""
+        if not self.current_images or index >= len(self.current_images) or self.current_images[index] is None:
+            return
+            
+        # Convert PIL image to QPixmap
+        image = self.current_images[index]
+        img_data = image.convert("RGB").tobytes("raw", "RGB")
+        qimage = QImage(img_data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimage)
+        
+        # Scale pixmap to fit the label while maintaining aspect ratio
+        pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        
+        # Display the image
+        self.image_label.setPixmap(pixmap)
+        
+    def show_previous_image(self):
+        """Show the previous image in the batch"""
+        if self.current_image_index > 0:
+            self.current_image_index -= 1
+            self.display_image(self.current_image_index)
+            
+            # Update navigation buttons
+            self.prev_button.setEnabled(self.current_image_index > 0)
+            self.next_button.setEnabled(True)  # There's always a next image if we can go back
+            
+            # Update counter
+            self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+            
+    def show_next_image(self):
+        """Show the next image in the batch"""
+        if self.current_image_index < len(self.current_images) - 1:
+            self.current_image_index += 1
+            self.display_image(self.current_image_index)
+            
+            # Update navigation buttons
+            self.prev_button.setEnabled(True)  # There's always a previous image if we can go forward
+            self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+            
+            # Update counter
+            self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
 
     def on_local_model_changed(self, model_name):
         """Handle change in local model selection"""
@@ -1369,16 +1455,6 @@ class MainWindow(QMainWindow):
                 if file_path:
                     images_to_save[0].save(file_path)
                     self.status_label.setText(f"Saved image to {file_path}")
-        
-    def update_model_info_from_tabs(self):
-        """Update model info when switching between Hugging Face and Local models tabs"""
-        current_tab = self.model_tabs.currentIndex()
-        if current_tab == 0:  # Hugging Face tab
-            if self.model_combo.currentText():  # If there's a selected model
-                self.on_model_changed(self.model_combo.currentText())
-        else:  # Local models tab
-            if self.local_model_combo.currentText():  # If there's a selected model
-                self.on_local_model_changed(self.local_model_combo.currentText())
 
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
