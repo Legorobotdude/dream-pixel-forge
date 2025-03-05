@@ -2,6 +2,8 @@
 
 A modern GUI application for running multiple AI image generation models locally on your machine, transforming your text prompts into stunning images.
 
+![DreamPixelForge User Interface](docs/images/dreampixelforge_ui.png)
+
 ## Features
 
 - Clean and intuitive user interface
