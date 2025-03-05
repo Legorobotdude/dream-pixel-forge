@@ -24,7 +24,8 @@ A modern GUI application for running multiple AI image generation models locally
 - Prompt enhancement using local LLMs via Ollama
 - Seed control for reproducible results
 - Multiple sampler algorithms for different generation styles
-- GPU acceleration support (if available)
+- **Cross-platform support** (Windows, macOS, Linux)
+- GPU acceleration support where available (CUDA on Windows/Linux, Metal on macOS)
 - Real-time progress tracking
 - Clear feedback during model downloads
 - Support for local models from Civitai and other sources
@@ -32,11 +33,14 @@ A modern GUI application for running multiple AI image generation models locally
 ## Requirements
 
 - Python 3.8 or higher
-- CUDA-capable GPU (recommended, 8+ GB VRAM for SDXL)
+- For Windows/Linux: CUDA-capable GPU (recommended, 8+ GB VRAM for SDXL)
+- For macOS: Apple Silicon Mac (M1/M2/M3) for Metal acceleration (Intel Macs will use CPU)
 - At least 8GB of RAM (16GB recommended)
 - 4-7GB free disk space per model (~20GB for all models)
 
 ## Installation
+
+### Windows/Linux
 
 1. Clone this repository:
    ```bash
@@ -54,6 +58,38 @@ A modern GUI application for running multiple AI image generation models locally
    ```bash
    pip install -r requirements.txt
    ```
+
+### macOS
+
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/yourusername/dream-pixel-forge.git
+   cd dream-pixel-forge
+   ```
+
+2. Use the provided installation script:
+   ```bash
+   chmod +x platform_specific/macos/install_macos.sh
+   ./platform_specific/macos/install_macos.sh
+   ```
+
+   Or follow these manual steps:
+
+3. Create a virtual environment (recommended):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate
+   ```
+
+4. Install the required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. Notes for macOS:
+   - Apple Silicon Macs (M1/M2/M3) will automatically use Metal Performance Shaders (MPS) for acceleration
+   - Intel Macs will run in CPU mode (significantly slower)
+   - Image generation will be slower than on equivalent NVIDIA GPUs
 
 ## Usage
 
@@ -262,6 +298,41 @@ You can manage the model cache in several ways:
    ```
 
 3. **One-time downloads** - Models are only downloaded once, so subsequent runs will be faster.
+
+### macOS Performance Expectations
+
+On macOS, performance will vary depending on your hardware:
+
+1. **Apple Silicon (M1/M2/M3):**
+   - Basic models (SD 1.5, SD 2.1) should run reasonably well
+   - Higher-end models (M2/M3 Pro, Max, Ultra) can handle SDXL with decent performance
+   - Expect ~2-4x slower generation than equivalent NVIDIA GPUs
+   - Use 30-40 steps rather than 50 for faster generation
+
+2. **Intel Macs:**
+   - Will run in CPU-only mode
+   - Very slow performance (minutes per image)
+   - Best to use smaller models (SD 1.5) and lower resolutions
+   - Consider reducing steps to 20-30 for faster results
+
+### macOS Troubleshooting
+
+If you encounter issues on macOS:
+
+1. **Memory errors:**
+   - Try reducing resolution (512x512 instead of 768x768)
+   - Use smaller batch sizes (1-2 images at once)
+   - Close other memory-intensive applications
+
+2. **Crashing on model loading:**
+   - Some models may not be compatible with MPS
+   - Try updating to the latest PyTorch version
+   - Restart the application between model changes
+
+3. **Very slow loading or generation:**
+   - First generation after starting the app is always slower
+   - Consider using smaller models (SD 1.5 instead of SDXL)
+   - Reduce the image resolution and number of steps
 
 ## Development
 

@@ -19,10 +19,45 @@ import requests
 import json
 import random
 import glob
+import platform
 
 # Local models directory
 LOCAL_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
+
+# Detect macOS for MPS (Metal) support
+IS_MACOS = platform.system() == 'Darwin'
+HAS_MPS = False
+if IS_MACOS:
+    try:
+        HAS_MPS = torch.backends.mps.is_available()
+        if HAS_MPS:
+            print("MPS (Metal Performance Shaders) is available on this Mac")
+        else:
+            print("MPS is not available on this Mac")
+    except:
+        print("Could not check MPS availability, assuming it's not available")
+        HAS_MPS = False
+
+# Function to get the appropriate device
+def get_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    elif HAS_MPS:
+        return "mps"
+    else:
+        return "cpu"
+
+# Function to get appropriate torch dtype based on device
+def get_torch_dtype():
+    device = get_device()
+    if device == "cuda":
+        return torch.float16
+    elif device == "mps":
+        # Some models may work with float16 on MPS, but float32 is safer
+        return torch.float32
+    else:
+        return torch.float32
 
 class OllamaClient:
     """
@@ -358,13 +393,19 @@ class GenerationThread(QThread):
             pipeline_class = self.model_config["pipeline"]
             size_gb = self.model_config.get("size_gb", 4.0)
             
+            # Get the appropriate device and prepare
+            device = get_device()
+            
             # Clear CUDA cache if available
-            if torch.cuda.is_available():
+            if device == "cuda":
                 torch.cuda.empty_cache()
                 print("CUDA is available, using GPU")
                 print(f"VRAM available: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.2f} GB")
+            elif device == "mps":
+                print("Using Apple Metal (MPS) for acceleration")
+                # No equivalent cache clearing for MPS
             else:
-                print("CUDA is not available, using CPU")
+                print("Neither CUDA nor MPS is available, using CPU - generation will be slow")
             
             # Check if model is already downloaded
             if not is_model_downloaded(model_id):
@@ -386,6 +427,9 @@ class GenerationThread(QThread):
             # Check if this is a local model
             is_local = self.model_config.get("is_local", False)
             
+            # Get appropriate torch dtype
+            torch_dtype = get_torch_dtype()
+            
             if is_local and os.path.exists(model_id) and model_id.endswith((".safetensors", ".ckpt")):
                 print(f"Loading local model from: {model_id}")
                 self.progress.emit(0, f"Loading local model from: {os.path.basename(model_id)}...")
@@ -394,7 +438,7 @@ class GenerationThread(QThread):
                     # Load from single file (used for Civitai models)
                     self.pipe = pipeline_class.from_single_file(
                         model_id,
-                        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                        torch_dtype=torch_dtype
                     )
                     print("Local model loaded successfully")
                 except Exception as e:
@@ -404,7 +448,7 @@ class GenerationThread(QThread):
                     print("Trying alternative loading method...")
                     self.pipe = pipeline_class.from_pretrained(
                         model_id,
-                        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                        torch_dtype=torch_dtype,
                         local_files_only=True
                     )
                 
@@ -425,7 +469,7 @@ class GenerationThread(QThread):
                 # Load remote model from Hugging Face Hub
                 self.pipe = pipeline_class.from_pretrained(
                     model_id,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                    torch_dtype=torch_dtype
                 )
             
             # Special handling for Pony Diffusion - Set clip_skip=2
@@ -448,21 +492,24 @@ class GenerationThread(QThread):
                 self.download_tracker = None
                 
                 # Let the user know download has completed
-                self.progress.emit(0, f"Model {model_id} downloaded successfully! Moving to GPU...")
+                self.progress.emit(0, f"Model {model_id} downloaded successfully! Moving to acceleration device...")
                 QApplication.processEvents()  # Make sure the message is displayed
             
-            if torch.cuda.is_available():
-                self.progress.emit(0, "Moving model to GPU...")
-                print("Moving model to GPU...")
-                self.pipe = self.pipe.to("cuda")
-                # Try to enable memory efficient attention if available
-                try:
-                    if hasattr(self.pipe, "enable_xformers_memory_efficient_attention"):
-                        print("Enabling memory efficient attention...")
-                        self.pipe.enable_xformers_memory_efficient_attention()
-                except Exception as e:
-                    print(f"Could not enable memory efficient attention: {str(e)}")
-                    print("Continuing without memory optimization...")
+            # Move model to appropriate acceleration device
+            if device != "cpu":
+                self.progress.emit(0, f"Moving model to {device.upper()}...")
+                print(f"Moving model to {device.upper()}...")
+                self.pipe = self.pipe.to(device)
+                
+                # Try to enable memory efficient attention if CUDA is available
+                if device == "cuda":
+                    try:
+                        if hasattr(self.pipe, "enable_xformers_memory_efficient_attention"):
+                            print("Enabling memory efficient attention...")
+                            self.pipe.enable_xformers_memory_efficient_attention()
+                    except Exception as e:
+                        print(f"Could not enable memory efficient attention: {str(e)}")
+                        print("Continuing without memory optimization...")
 
             # Generate the images in batch
             self.progress.emit(0, f"Starting generation of {self.batch_size} images...")
@@ -485,13 +532,13 @@ class GenerationThread(QThread):
                 # Set generator for reproducible results if seed is provided
                 if i == 0 and self.seed is not None:
                     # For the first image, use the provided seed
-                    generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                    generator = torch.Generator(device=get_device() if get_device() != "mps" else "cpu")
                     generator.manual_seed(self.seed)
                     current_seed = self.seed
                     print(f"Using seed for image {i+1}: {current_seed}")
                 else:
                     # For subsequent images or if no seed was provided, use random seeds
-                    generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+                    generator = torch.Generator(device=get_device() if get_device() != "mps" else "cpu")
                     # Generate a seed that fits in a 32-bit integer to avoid overflow
                     current_seed = random.randint(0, 2147483647)
                     generator.manual_seed(current_seed)
@@ -635,8 +682,11 @@ class GenerationThread(QThread):
             
             if self.pipe is not None:
                 del self.pipe
-            if torch.cuda.is_available():
+            
+            # Clean up device-specific resources
+            if get_device() == "cuda" and torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            # No explicit cleanup needed for MPS devices
 
 class MainWindow(QMainWindow):
     # Class variable to keep track of generation counter
