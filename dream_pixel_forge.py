@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QComboBox, QMessageBox, QGroupBox, QRadioButton, 
                             QTabWidget, QListWidget, QListWidgetItem, QDialog,
                             QFormLayout)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QPixmap, QImage, QAction
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
 import torch
@@ -1033,6 +1033,9 @@ class MainWindow(QMainWindow):
 
     def on_model_changed(self, model_name):
         """Update UI when model selection changes"""
+        # Cancel any running generation thread
+        self.stop_generation_if_running()
+        
         model_config = AVAILABLE_MODELS[model_name]
         self.model_info.setText(model_config["description"])
         self.guidance_input.setValue(model_config["default_guidance_scale"])
@@ -1052,6 +1055,39 @@ class MainWindow(QMainWindow):
         else:
             # Reset status label if model is already downloaded
             self.status_label.setText("Ready")
+            
+    def stop_generation_if_running(self):
+        """Stop any running generation thread"""
+        if hasattr(self, 'generation_thread') and self.generation_thread and self.generation_thread.isRunning():
+            print("Stopping current generation due to model change")
+            
+            # Disconnect signals to prevent further UI updates
+            try:
+                self.generation_thread.progress.disconnect()
+                self.generation_thread.image_ready.disconnect()
+                self.generation_thread.error.disconnect()
+                self.generation_thread.finished.disconnect()
+            except:
+                # It's fine if signals were already disconnected
+                pass
+            
+            # Terminate the thread
+            self.generation_thread.terminate()
+            self.generation_thread.wait(100)  # Wait briefly for termination
+            
+            # Update UI to reflect cancellation
+            try:
+                if hasattr(self, 'generate_button'):
+                    self.generate_button.setEnabled(True)
+                
+                if hasattr(self, 'progress_bar'):
+                    self.progress_bar.setVisible(False)
+                
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText("Generation cancelled due to model change")
+            except RuntimeError:
+                # UI elements were likely deleted during model change
+                print("UI update error: Some UI elements have been deleted")
 
     def update_resolutions(self):
         """Update the resolution presets based on selected model"""
@@ -1208,109 +1244,166 @@ class MainWindow(QMainWindow):
         
     def handle_image_ready(self, image, index, total):
         """Handle each image as it completes generation"""
-        # Store the image in the current_images list
-        if not hasattr(self, 'current_images') or self.current_images is None or len(self.current_images) != total:
-            self.current_images = [None] * total
+        try:
+            # Store the image in the current_images list
+            if not hasattr(self, 'current_images') or self.current_images is None or len(self.current_images) != total:
+                self.current_images = [None] * total
 
-        # Add the image to the list at the correct index
-        self.current_images[index] = image
-        
-        # Update status label with progress
-        seed = self.generation_thread.generated_seeds[index]
-        self.status_label.setText(f"Generated image {index+1}/{total} (seed: {seed})")
-        
-        # Auto-save image to outputs folder
-        self.auto_save_image(image, index, seed)
-        
-        # Initialize UI for image browsing if needed
-        if total > 1 and not hasattr(self, 'image_nav_layout'):
-            # Create navigation buttons for browsing images
-            self.image_nav_layout = QHBoxLayout()
+            # Add the image to the list at the correct index
+            self.current_images[index] = image
             
-            self.prev_button = QPushButton("Previous")
-            self.prev_button.clicked.connect(self.show_previous_image)
-            self.prev_button.setEnabled(False)  # Disabled at first image
+            # Update status label with progress
+            seed = self.generation_thread.generated_seeds[index]
+            try:
+                self.status_label.setText(f"Generated image {index+1}/{total} (seed: {seed})")
+            except RuntimeError:
+                # Status label was deleted
+                print(f"Status label was deleted, can't update. Generated image {index+1}/{total} (seed: {seed})")
             
-            self.image_counter_label = QLabel(f"Image {index+1}/{total}")
-            self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Auto-save image to outputs folder
+            self.auto_save_image(image, index, seed)
             
-            self.next_button = QPushButton("Next")
-            self.next_button.clicked.connect(self.show_next_image)
-            self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
+            # Initialize UI for image browsing if needed
+            if total > 1 and not hasattr(self, 'image_nav_layout'):
+                # Create navigation buttons for browsing images
+                self.image_nav_layout = QHBoxLayout()
+                
+                self.prev_button = QPushButton("Previous")
+                self.prev_button.clicked.connect(self.show_previous_image)
+                self.prev_button.setEnabled(False)  # Disabled at first image
+                
+                self.image_counter_label = QLabel(f"Image {index+1}/{total}")
+                self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                
+                self.next_button = QPushButton("Next")
+                self.next_button.clicked.connect(self.show_next_image)
+                self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
+                
+                self.image_nav_layout.addWidget(self.prev_button)
+                self.image_nav_layout.addWidget(self.image_counter_label)
+                self.image_nav_layout.addWidget(self.next_button)
+                
+                # Find the layout that contains the image label
+                layout = self.centralWidget().layout()
+                layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
+            elif hasattr(self, 'image_counter_label'):
+                # Update the counter if it already exists
+                try:
+                    self.image_counter_label.setText(f"Image {index+1}/{total}")
+                    self.prev_button.setEnabled(index > 0)
+                    self.next_button.setEnabled(index < total - 1)
+                except RuntimeError:
+                    # UI element was likely deleted during model change
+                    print("UI update error: Navigation widgets have been deleted")
             
-            self.image_nav_layout.addWidget(self.prev_button)
-            self.image_nav_layout.addWidget(self.image_counter_label)
-            self.image_nav_layout.addWidget(self.next_button)
+            # Set the current image index
+            self.current_image_index = index
             
-            # Find the layout that contains the image label
-            layout = self.centralWidget().layout()
-            layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
-        elif hasattr(self, 'image_counter_label'):
-            # Update the counter if it already exists
-            self.image_counter_label.setText(f"Image {index+1}/{total}")
-            self.prev_button.setEnabled(index > 0)
-            self.next_button.setEnabled(index < total - 1)
-        
-        # Set the current image index
-        self.current_image_index = index
-        
-        # Display the image
-        self.display_image(index)
-        
-        # Enable the save button after the first image
-        self.save_button.setEnabled(True)
-        
-        # Update save button text based on total images
-        if total > 1:
-            self.save_button.setText("Save Images to Custom Location")
-        else:
-            self.save_button.setText("Save Image to Custom Location")
+            # Display the image
+            self.display_image(index)
+            
+            # Enable the save button after the first image
+            try:
+                self.save_button.setEnabled(True)
+                
+                # Update save button text based on total images
+                if total > 1:
+                    self.save_button.setText("Save Images to Custom Location")
+                else:
+                    self.save_button.setText("Save Image to Custom Location")
+            except RuntimeError:
+                # UI element was likely deleted during model change
+                print("UI update error: Save button has been deleted")
+        except RuntimeError as e:
+            # Handle Qt object deleted errors
+            print(f"UI update error (normal if model was changed): {str(e)}")
+        except Exception as e:
+            # Log other unexpected errors
+            print(f"Unexpected error in handle_image_ready: {str(e)}")
 
     def display_image(self, index):
         """Display the image at the specified index"""
-        if not self.current_images or index >= len(self.current_images) or self.current_images[index] is None:
-            return
+        try:
+            if not self.current_images or index >= len(self.current_images) or self.current_images[index] is None:
+                return
+                
+            # Check if image_label exists
+            if not hasattr(self, 'image_label'):
+                return
+                
+            # Convert PIL image to QPixmap
+            image = self.current_images[index]
+            img_data = image.convert("RGB").tobytes("raw", "RGB")
+            qimage = QImage(img_data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimage)
             
-        # Convert PIL image to QPixmap
-        image = self.current_images[index]
-        img_data = image.convert("RGB").tobytes("raw", "RGB")
-        qimage = QImage(img_data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimage)
-        
-        # Scale pixmap to fit the label while maintaining aspect ratio
-        pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        
-        # Display the image
-        self.image_label.setPixmap(pixmap)
-        
+            # Scale pixmap to fit the label while maintaining aspect ratio
+            pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            
+            # Display the image
+            self.image_label.setPixmap(pixmap)
+        except RuntimeError as e:
+            # Handle Qt object deleted errors
+            print(f"UI update error in display_image (normal if model was changed): {str(e)}")
+        except Exception as e:
+            # Log other unexpected errors
+            print(f"Unexpected error in display_image: {str(e)}")
+
     def show_previous_image(self):
         """Show the previous image in the batch"""
-        if self.current_image_index > 0:
-            self.current_image_index -= 1
-            self.display_image(self.current_image_index)
-            
-            # Update navigation buttons
-            self.prev_button.setEnabled(self.current_image_index > 0)
-            self.next_button.setEnabled(True)  # There's always a next image if we can go back
-            
-            # Update counter
-            self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+        try:
+            if self.current_image_index > 0:
+                self.current_image_index -= 1
+                self.display_image(self.current_image_index)
+                
+                # Update navigation buttons
+                try:
+                    if hasattr(self, 'prev_button'):
+                        self.prev_button.setEnabled(self.current_image_index > 0)
+                    
+                    if hasattr(self, 'next_button'):
+                        self.next_button.setEnabled(True)  # There's always a next image if we can go back
+                    
+                    # Update counter
+                    if hasattr(self, 'image_counter_label'):
+                        self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+                except RuntimeError:
+                    # UI elements were likely deleted during model change
+                    print("UI update error: Navigation widgets have been deleted")
+        except Exception as e:
+            # Log other unexpected errors
+            print(f"Unexpected error in show_previous_image: {str(e)}")
             
     def show_next_image(self):
         """Show the next image in the batch"""
-        if self.current_image_index < len(self.current_images) - 1:
-            self.current_image_index += 1
-            self.display_image(self.current_image_index)
-            
-            # Update navigation buttons
-            self.prev_button.setEnabled(True)  # There's always a previous image if we can go forward
-            self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
-            
-            # Update counter
-            self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+        try:
+            if self.current_image_index < len(self.current_images) - 1:
+                self.current_image_index += 1
+                self.display_image(self.current_image_index)
+                
+                # Update navigation buttons
+                try:
+                    if hasattr(self, 'prev_button'):
+                        self.prev_button.setEnabled(True)  # There's always a previous image if we can go forward
+                    
+                    if hasattr(self, 'next_button'):
+                        self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+                    
+                    # Update counter
+                    if hasattr(self, 'image_counter_label'):
+                        self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+                except RuntimeError:
+                    # UI elements were likely deleted during model change
+                    print("UI update error: Navigation widgets have been deleted")
+        except Exception as e:
+            # Log other unexpected errors
+            print(f"Unexpected error in show_next_image: {str(e)}")
 
     def on_local_model_changed(self, model_name):
         """Handle change in local model selection"""
+        # Cancel any running generation thread
+        self.stop_generation_if_running()
+        
         if not model_name or model_name not in LOCAL_MODELS:
             return
 
@@ -1602,28 +1695,43 @@ class MainWindow(QMainWindow):
 
     def auto_save_image(self, image, index, seed):
         """Automatically save the generated image to the outputs folder"""
-        # Increment the generation counter for this new image
-        MainWindow.generation_counter += 1
-        
-        # Generate base filename from prompt (first 3 words)
-        base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
-        base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
-        
-        # If base_name is empty (e.g., prompt had no alphanumeric chars), use "image" instead
-        if not base_name:
-            base_name = "image"
-        
-        # Create filename with counter first, then prompt and seed
-        # Format: 0001_promptwords_seed123456.png
-        file_name = f"{MainWindow.generation_counter:04d}_{base_name}_seed{seed}.png"
-        file_path = os.path.join(self.outputs_dir, file_name)
-        
-        # Save the image
-        image.save(file_path)
-        print(f"Auto-saved image to {file_path}")
-        
-        # Update status label to inform about auto-saving
-        self.status_label.setText(f"Generated image {index+1}/{len(self.current_images)} (seed: {seed}) - Auto-saved to outputs folder")
+        try:
+            # Increment the generation counter for this new image
+            MainWindow.generation_counter += 1
+            
+            # Generate base filename from prompt (first 3 words)
+            base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
+            base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
+            
+            # If base_name is empty (e.g., prompt had no alphanumeric chars), use "image" instead
+            if not base_name:
+                base_name = "image"
+            
+            # Create filename with counter first, then prompt and seed
+            # Format: 0001_promptwords_seed123456.png
+            file_name = f"{MainWindow.generation_counter:04d}_{base_name}_seed{seed}.png"
+            file_path = os.path.join(self.outputs_dir, file_name)
+            
+            # Save the image
+            image.save(file_path)
+            print(f"Auto-saved image to {file_path}")
+            
+            # Update status label to inform about auto-saving
+            try:
+                if hasattr(self, 'status_label'):
+                    self.status_label.setText(f"Generated image {index+1}/{len(self.current_images)} (seed: {seed}) - Auto-saved to outputs folder")
+            except RuntimeError:
+                # Status label was deleted
+                print(f"Status label deleted, can't update. Auto-saved image to {file_path}")
+        except Exception as e:
+            # Log other unexpected errors but still try to save the image
+            print(f"Unexpected error in auto_save_image: {str(e)}")
+            try:
+                # Try to save the image even if there was an error updating the UI
+                image.save(file_path)
+                print(f"Auto-saved image despite errors: {file_path}")
+            except:
+                print("Failed to save image due to error")
 
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
