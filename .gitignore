@@ -1,7 +1,9 @@
-# Python bytecode
+# Python-related
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
 
 # Virtual environment
 venv/
@@ -17,29 +19,6 @@ build/
 *.manifest
 *.spec
 
-# PyQt generated files
-*.pyc
-*.pyo
-
-# Model files and caches
-*.pt
-*.pth
-*.ckpt
-*.safetensors
-*.onnx
-.cache/
-huggingface/
-
-# Specific model directory exclusion
-# Ignore model files but keep the directory
-models/**/*.safetensors
-models/**/*.ckpt
-models/**/*.pt
-models/**/*.bin
-models/**/*.pth
-# Keep the models directory itself
-!models/.gitkeep
-
 # IDE files
 .idea/
 .vscode/
@@ -49,7 +28,21 @@ models/**/*.pth
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Model files and caches
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+.cache/
+huggingface/
+models/
+# Keep the models directory itself (if needed)
+!models/.gitkeep
+
 # Generated images
+outputs/
 output/
 generated/
 *.png
