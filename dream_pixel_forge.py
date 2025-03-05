@@ -792,7 +792,12 @@ class MainWindow(QMainWindow):
         resolution_layout = QVBoxLayout()
         resolution_label = QLabel("Resolution:")
         self.resolution_combo = QComboBox()
-        self.update_resolutions()
+        
+        # Initialize with default model's resolutions
+        default_model = "Stable Diffusion 1.5"
+        resolution_presets = AVAILABLE_MODELS[default_model]["resolution_presets"]
+        self.resolution_combo.addItems(resolution_presets.keys())
+        
         resolution_layout.addWidget(resolution_label)
         resolution_layout.addWidget(self.resolution_combo)
         params_layout.addLayout(resolution_layout)
@@ -900,8 +905,41 @@ class MainWindow(QMainWindow):
             os.makedirs(self.outputs_dir)
             print(f"Created outputs directory at {self.outputs_dir}")
         
-        # Check if first time use
+        # Initialize the counter by finding the highest existing count
+        self.initialize_counter()
+        
+        # Check for first use
         self.check_first_use()
+        
+        # Initialize with the default model
+        default_model = "Stable Diffusion 1.5"
+        self.on_model_changed(default_model)
+
+    def initialize_counter(self):
+        """Find the highest counter value from existing files in the outputs directory"""
+        try:
+            if not os.path.exists(self.outputs_dir):
+                return
+                
+            highest_counter = 0
+            # Search for files matching the pattern: ####_*.png
+            for filename in os.listdir(self.outputs_dir):
+                if filename.endswith(".png") and "_" in filename:
+                    # Try to extract the counter value from the filename
+                    try:
+                        counter_str = filename.split("_")[0]
+                        counter = int(counter_str)
+                        highest_counter = max(highest_counter, counter)
+                    except (ValueError, IndexError):
+                        # If file doesn't match our expected format, skip it
+                        continue
+            
+            # Set the class counter to the highest found + 1
+            if highest_counter > 0:
+                MainWindow.generation_counter = highest_counter
+                print(f"Initialized counter to {MainWindow.generation_counter} based on existing files")
+        except Exception as e:
+            print(f"Error initializing counter: {str(e)}")
 
     def create_menu(self):
         """Create the menu bar"""
@@ -1053,7 +1091,15 @@ class MainWindow(QMainWindow):
         # Get selected resolution
         selected_resolution = self.resolution_combo.currentText()
         resolution_presets = model_config["resolution_presets"]
-        width, height = resolution_presets[selected_resolution]
+        
+        # Check if the selected resolution exists in the presets
+        if selected_resolution in resolution_presets:
+            width, height = resolution_presets[selected_resolution]
+        else:
+            # Fallback to the first resolution preset if the selected one isn't available
+            first_preset = list(resolution_presets.keys())[0]
+            width, height = resolution_presets[first_preset]
+            print(f"Selected resolution '{selected_resolution}' not found in model presets. Using '{first_preset}' instead.")
         
         # Process seed value (-1 means random/None)
         seed_value = self.seed_input.value()
@@ -1071,16 +1117,29 @@ class MainWindow(QMainWindow):
         prompt = self.prompt_input.text()
         negative_prompt = self.neg_prompt_input.text()
         
+        # Check if this is a Pony model (either HuggingFace or local)
+        is_pony_model = False
         if current_tab == 0 and "pony diffusion" in current_model.lower():
+            is_pony_model = True
+        elif current_tab == 1 and current_model in LOCAL_MODELS:
+            # Check if it's a locally imported pony model
+            if hasattr(LOCAL_MODELS[current_model], 'pony_override') and LOCAL_MODELS[current_model].pony_override:
+                is_pony_model = True
+            # Also check the filename for pony indicators
+            elif "pony" in LOCAL_MODELS[current_model].file_path.lower():
+                is_pony_model = True
+        
+        # Add quality boosters for Pony models
+        if is_pony_model:
             # Check if quality boosters are already in the prompt
             if not any(booster in prompt.lower() for booster in ["score_9", "score_8_up"]):
-                # Add quality boosters as recommended for Pony Diffusion
-                quality_booster = "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
+                # Add quality boosters as recommended for Pony Diffusion, using only the first 3 as requested
+                quality_booster = "score_9, score_8_up, score_7_up"
                 if prompt.strip():
                     prompt = f"{quality_booster}, {prompt}"
                 else:
                     prompt = quality_booster
-                self.status_label.setText("Added quality boosters for Pony Diffusion")
+                self.status_label.setText("Added quality boosters for Pony model")
         
         # Reset current images when starting a new generation
         batch_size = self.batch_input.value()
@@ -1513,10 +1572,18 @@ class MainWindow(QMainWindow):
                     base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
                     base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
                     
-                    # Save each image with index and seed
+                    # If base_name is empty (e.g., prompt had no alphanumeric chars), use "image" instead
+                    if not base_name:
+                        base_name = "image"
+                    
+                    # Save each image with the same format as auto-save: counter_promptwords_seed.png
                     for i, image in enumerate(images_to_save):
+                        # Increment counter for each custom saved image too
+                        MainWindow.generation_counter += 1
+                        # Get the seed if available
                         seed = self.generation_thread.generated_seeds[i] if hasattr(self.generation_thread, 'generated_seeds') and i < len(self.generation_thread.generated_seeds) else "unknown"
-                        file_path = os.path.join(save_dir, f"{base_name}_{i+1}_seed{seed}.png")
+                        # Use the same format as auto_save_image
+                        file_path = os.path.join(save_dir, f"{MainWindow.generation_counter:04d}_{base_name}_seed{seed}.png")
                         image.save(file_path)
                     
                     self.status_label.setText(f"Saved {len(images_to_save)} images to {save_dir}")
@@ -1546,8 +1613,9 @@ class MainWindow(QMainWindow):
         if not base_name:
             base_name = "image"
         
-        # Create filename with generation counter and seed
-        file_name = f"{base_name}_{MainWindow.generation_counter:04d}_seed{seed}.png"
+        # Create filename with counter first, then prompt and seed
+        # Format: 0001_promptwords_seed123456.png
+        file_name = f"{MainWindow.generation_counter:04d}_{base_name}_seed{seed}.png"
         file_path = os.path.join(self.outputs_dir, file_name)
         
         # Save the image

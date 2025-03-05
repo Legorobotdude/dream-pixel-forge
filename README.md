@@ -110,6 +110,12 @@ Specialized model for creating stylized art with high quality outputs. This mode
 - Uses CLIP skip feature for improved output quality
 - Based on SDXL, so needs 8+ GB VRAM for optimal performance
 
+**Quality Score Tags:**
+- All prompts for Pony Diffusion (both official and local models) are automatically enhanced with `score_9, score_8_up, score_7_up` quality tags
+- These tags tell the model to generate high-quality images according to its internal aesthetic scoring system
+- You don't need to add these tags manually - they're added automatically
+- This applies to both the official Hugging Face model and any local Pony models you add
+
 ## Using Local Models
 
 DreamPixelForge supports loading custom models from Civitai and other sources. These models should be in `.safetensors` or `.ckpt` format.
