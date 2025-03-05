@@ -17,6 +17,7 @@ A modern GUI application for running multiple AI image generation models locally
 - Adjustable generation parameters (steps and guidance scale)
 - Batch image generation (generate up to 10 images at once)
 - Model-specific resolution presets
+- **Automatic image saving to outputs folder**
 - Save generated images in various formats
 - Prompt enhancement using local LLMs via Ollama
 - Seed control for reproducible results
@@ -75,10 +76,13 @@ A modern GUI application for running multiple AI image generation models locally
      - Different samplers have different characteristics and speeds
      - "Euler a" is a good default for most images
 6. Click "Generate Images" and wait for the result
-7. For batch generation:
+7. **All generated images are automatically saved** to the "outputs" folder, with filenames that include:
+   - The first few words of your prompt
+   - A unique generation counter
+   - The seed used for the image
+8. For batch generation:
    - Use the "Previous" and "Next" buttons to navigate between generated images
-   - When saving, choose whether to save the current image or all images in the batch
-8. Use the "Save Image" button to save your generated image(s)
+9. Use the "Save Image to Custom Location" button if you want to save your image to a specific location
 
 ## Models
 

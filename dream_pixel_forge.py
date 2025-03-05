@@ -639,6 +639,9 @@ class GenerationThread(QThread):
                 torch.cuda.empty_cache()
 
 class MainWindow(QMainWindow):
+    # Class variable to keep track of generation counter
+    generation_counter = 0
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DreamPixelForge - Text to Image")
@@ -880,7 +883,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.image_label)
         
         # Create save button
-        self.save_button = QPushButton("Save Image")
+        self.save_button = QPushButton("Save Image to Custom Location")
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
         layout.addWidget(self.save_button)
@@ -890,6 +893,12 @@ class MainWindow(QMainWindow):
         
         # Initialize local models dropdown with auto-imported models
         self.refresh_local_models()
+        
+        # Create outputs directory if it doesn't exist
+        self.outputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        if not os.path.exists(self.outputs_dir):
+            os.makedirs(self.outputs_dir)
+            print(f"Created outputs directory at {self.outputs_dir}")
         
         # Check if first time use
         self.check_first_use()
@@ -1136,7 +1145,7 @@ class MainWindow(QMainWindow):
         """Handle completion of generation thread"""
         self.generate_button.setEnabled(True)
         self.progress_bar.setVisible(False)
-        self.status_label.setText("Generation complete!")
+        self.status_label.setText("Generation complete! All images auto-saved to outputs folder.")
         
     def handle_image_ready(self, image, index, total):
         """Handle each image as it completes generation"""
@@ -1148,7 +1157,11 @@ class MainWindow(QMainWindow):
         self.current_images[index] = image
         
         # Update status label with progress
-        self.status_label.setText(f"Generated image {index+1}/{total} (seed: {self.generation_thread.generated_seeds[index]})")
+        seed = self.generation_thread.generated_seeds[index]
+        self.status_label.setText(f"Generated image {index+1}/{total} (seed: {seed})")
+        
+        # Auto-save image to outputs folder
+        self.auto_save_image(image, index, seed)
         
         # Initialize UI for image browsing if needed
         if total > 1 and not hasattr(self, 'image_nav_layout'):
@@ -1190,9 +1203,9 @@ class MainWindow(QMainWindow):
         
         # Update save button text based on total images
         if total > 1:
-            self.save_button.setText("Save Images")
+            self.save_button.setText("Save Images to Custom Location")
         else:
-            self.save_button.setText("Save Image")
+            self.save_button.setText("Save Image to Custom Location")
 
     def display_image(self, index):
         """Display the image at the specified index"""
@@ -1448,6 +1461,18 @@ class MainWindow(QMainWindow):
         if not self.current_images:
             return
         
+        # Inform the user that images are already auto-saved
+        auto_save_info = QMessageBox()
+        auto_save_info.setIcon(QMessageBox.Information)
+        auto_save_info.setWindowTitle("Auto-Save Information")
+        auto_save_info.setText("Images are automatically saved to the 'outputs' folder.")
+        auto_save_info.setInformativeText("Do you still want to save to a custom location?")
+        auto_save_info.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        choice = auto_save_info.exec()
+        
+        if choice == QMessageBox.No:
+            return
+        
         if len(self.current_images) == 1:
             # Single image save
             file_path, _ = QFileDialog.getSaveFileName(
@@ -1507,6 +1532,30 @@ class MainWindow(QMainWindow):
                 if file_path:
                     images_to_save[0].save(file_path)
                     self.status_label.setText(f"Saved image to {file_path}")
+
+    def auto_save_image(self, image, index, seed):
+        """Automatically save the generated image to the outputs folder"""
+        # Increment the generation counter for this new image
+        MainWindow.generation_counter += 1
+        
+        # Generate base filename from prompt (first 3 words)
+        base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
+        base_name = "".join(c for c in base_name if c.isalnum() or c == '_')
+        
+        # If base_name is empty (e.g., prompt had no alphanumeric chars), use "image" instead
+        if not base_name:
+            base_name = "image"
+        
+        # Create filename with generation counter and seed
+        file_name = f"{base_name}_{MainWindow.generation_counter:04d}_seed{seed}.png"
+        file_path = os.path.join(self.outputs_dir, file_name)
+        
+        # Save the image
+        image.save(file_path)
+        print(f"Auto-saved image to {file_path}")
+        
+        # Update status label to inform about auto-saving
+        self.status_label.setText(f"Generated image {index+1}/{len(self.current_images)} (seed: {seed}) - Auto-saved to outputs folder")
 
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
