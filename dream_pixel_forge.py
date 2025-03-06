@@ -5,9 +5,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QSpinBox, QDoubleSpinBox, QProgressBar, QFileDialog,
                             QComboBox, QMessageBox, QGroupBox, QRadioButton, 
                             QTabWidget, QListWidget, QListWidgetItem, QDialog,
-                            QFormLayout)
+                            QFormLayout, QFrame, QStyle, QStyleOptionComboBox,
+                            QMenu, QCheckBox, QSizePolicy, QGridLayout,
+                            QScrollArea)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QImage, QAction
+from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
 import torch
 from PIL import Image
@@ -694,16 +696,25 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        
+        # App setup
         self.setWindowTitle("DreamPixelForge - Text to Image")
-        self.setMinimumSize(800, 600)
+        self.setGeometry(100, 100, 1200, 900)  # Increased default size
         
         # Create menu bar
         self.create_menu()
         
-        # Create main widget and layout
+        # Create a scroll area for the main content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        self.setCentralWidget(scroll_area)
+        
+        # Create the main content widget
         main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+        
+        # Set the main widget as the scroll area's widget
+        scroll_area.setWidget(main_widget)
         
         # Initialize Ollama client
         self.ollama_client = OllamaClient()
@@ -718,43 +729,157 @@ class MainWindow(QMainWindow):
         
         # Model selection
         model_layout = QHBoxLayout()
-        model_label = QLabel("Model:")
+        model_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
         
         # Create a tabbed interface for model selection
         self.model_tabs = QTabWidget()
+        # Make it very compact
+        self.model_tabs.setMinimumHeight(80)
+        self.model_tabs.setMaximumHeight(120)
+        
+        # Improve tab appearance with more compact styling
+        self.model_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #666;
+                background-color: #333;
+                border-radius: 4px;
+            }
+            QTabBar::tab {
+                background-color: #444;
+                color: white;
+                border: 1px solid #666;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                padding: 4px 8px;
+                min-width: 100px;
+            }
+            QTabBar::tab:selected {
+                background-color: #555;
+                border-bottom: none;
+            }
+            QTabBar::tab:hover {
+                background-color: #666;
+            }
+        """)
         
         # Hugging Face models tab
         hf_tab = QWidget()
         hf_layout = QVBoxLayout(hf_tab)
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(AVAILABLE_MODELS.keys())
-        self.model_combo.currentTextChanged.connect(self.on_model_changed)
-        hf_layout.addWidget(self.model_combo)
+        hf_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
+        hf_layout.setSpacing(1)  # Minimal spacing
+        
+        # Create a more compact layout for the dropdown - using horizontal layout
+        model_container = QFrame()
+        model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
+        model_container.setStyleSheet("""
+            QFrame {
+                background-color: #444;
+                border: 1px solid #666;
+                border-radius: 4px;
+                padding: 3px;
+                margin: 1px;
+            }
+        """)
+        
+        # Create a horizontal layout for the label and dropdown
+        model_container_layout = QHBoxLayout(model_container)
+        model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
+        model_container_layout.setSpacing(5)  # Small spacing between label and dropdown
+        
+        hf_model_label = QLabel("Select HuggingFace Model:")
+        hf_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
+        hf_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
+        
+        # Use the right control based on platform
+        if platform.system() == 'Darwin':  # macOS
+            self.model_combo = MacDropdownButton(list(AVAILABLE_MODELS.keys()))
+            self.model_combo.currentTextChanged.connect(self.on_model_changed)
+            # Set initial selection to Stable Diffusion 1.5
+            self.model_combo.setCurrentText("Stable Diffusion 1.5")
+        else:
+            self.model_combo = QComboBox()
+            self.model_combo.addItems(AVAILABLE_MODELS.keys())
+            self.model_combo.currentTextChanged.connect(self.on_model_changed)
+            # Set initial selection
+            self.model_combo.setCurrentText("Stable Diffusion 1.5")
+        
+        model_container_layout.addWidget(hf_model_label)
+        model_container_layout.addWidget(self.model_combo)
+        
+        # Add to tab layout with proper spacing
+        hf_layout.addWidget(model_container)
         self.model_tabs.addTab(hf_tab, "Hugging Face Models")
         
         # Local models tab
         local_tab = QWidget()
         local_layout = QVBoxLayout(local_tab)
-        self.local_model_combo = QComboBox()
-        self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
+        local_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
+        local_layout.setSpacing(1)  # Minimal spacing
         
-        local_buttons_layout = QHBoxLayout()
+        # Create a more compact layout for the dropdown - using horizontal layout
+        local_model_container = QFrame()
+        local_model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
+        local_model_container.setStyleSheet("""
+            QFrame {
+                background-color: #444;
+                border: 1px solid #666;
+                border-radius: 4px;
+                padding: 3px;
+                margin: 1px;
+            }
+        """)
+        
+        # Create a horizontal layout for the model section
+        local_model_container_layout = QHBoxLayout(local_model_container)
+        local_model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
+        local_model_container_layout.setSpacing(5)  # Small spacing
+        
+        local_model_label = QLabel("Select Local Model:")
+        local_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
+        local_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
+        
+        # Create a layout for the dropdown and manage button
+        local_controls_layout = QHBoxLayout()
+        local_controls_layout.setSpacing(5)  # Small spacing
+        local_controls_layout.setContentsMargins(0, 0, 0, 0)  # No margins
+        
+        # Use the right control based on platform
+        if platform.system() == 'Darwin':  # macOS
+            self.local_model_combo = MacDropdownButton()
+            self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
+        else:
+            self.local_model_combo = QComboBox()
+            self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
+            
         manage_models_btn = QPushButton("Manage Models")
+        manage_models_btn.setMaximumHeight(25)  # Limit height
+        manage_models_btn.setStyleSheet("font-size: 11px; padding: 2px 5px;")
         manage_models_btn.clicked.connect(self.open_manage_models)
-        local_buttons_layout.addWidget(self.local_model_combo)
-        local_buttons_layout.addWidget(manage_models_btn)
         
-        local_layout.addLayout(local_buttons_layout)
+        # Add label directly to the container layout
+        local_model_container_layout.addWidget(local_model_label)
+        
+        # Add combo and button to the controls layout
+        local_controls_layout.addWidget(self.local_model_combo, 3)  # Give dropdown more space
+        local_controls_layout.addWidget(manage_models_btn, 1)
+        
+        # Add the controls layout to the container layout
+        local_model_container_layout.addLayout(local_controls_layout, 1)
+        
+        # Add to tab layout with proper spacing
+        local_layout.addWidget(local_model_container)
         self.model_tabs.addTab(local_tab, "Local Models")
         
         # Connect tab change to update model info
         self.model_tabs.currentChanged.connect(self.update_model_info_from_tabs)
         
-        # Add a model info label
+        # Add a model info label with compact styling
         self.model_info = QLabel(AVAILABLE_MODELS["Stable Diffusion 1.5"]["description"])
         self.model_info.setWordWrap(True)
+        self.model_info.setStyleSheet("font-size: 11px; color: #aaa; margin-top: 0px;")
+        self.model_info.setMaximumHeight(40)  # Limit height of model info
         
-        model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_tabs)
         input_layout.addLayout(model_layout)
         input_layout.addWidget(self.model_info)
@@ -784,8 +909,14 @@ class MainWindow(QMainWindow):
             # Model selection
             ollama_model_layout = QHBoxLayout()
             ollama_model_label = QLabel("Ollama Model:")
-            self.ollama_model_combo = QComboBox()
-            self.ollama_model_combo.addItems(self.ollama_models)
+            
+            # Use the right control based on platform
+            if platform.system() == 'Darwin':  # macOS
+                self.ollama_model_combo = MacDropdownButton(self.ollama_models)
+            else:
+                self.ollama_model_combo = QComboBox()
+                self.ollama_model_combo.addItems(self.ollama_models)
+                
             refresh_ollama_button = QPushButton("Refresh")
             refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
             ollama_model_layout.addWidget(ollama_model_label)
@@ -838,32 +969,54 @@ class MainWindow(QMainWindow):
         # Parameters section
         params_layout = QHBoxLayout()
         
-        # Resolution preset
-        resolution_layout = QVBoxLayout()
+        # Resolution selection
+        resolution_layout = QHBoxLayout()
         resolution_label = QLabel("Resolution:")
-        self.resolution_combo = QComboBox()
         
-        # Initialize with default model's resolutions
-        default_model = "Stable Diffusion 1.5"
-        resolution_presets = AVAILABLE_MODELS[default_model]["resolution_presets"]
-        self.resolution_combo.addItems(resolution_presets.keys())
+        # Create the appropriate control based on platform
+        if platform.system() == 'Darwin':  # macOS
+            self.resolution_combo = MacDropdownButton()
+            default_model = list(AVAILABLE_MODELS.keys())[0]
+            default_resolutions = AVAILABLE_MODELS[default_model].get('resolutions', ['512x512 (Square)'])
+            self.resolution_combo.addItems(default_resolutions)
+            # Set the initial text to show the selected option
+            if default_resolutions:
+                self.resolution_combo.setText(f"{default_resolutions[0]} ▼")
+        else:
+            self.resolution_combo = QComboBox()
+            default_model = list(AVAILABLE_MODELS.keys())[0]
+            default_resolutions = AVAILABLE_MODELS[default_model].get('resolutions', ['512x512 (Square)'])
+            self.resolution_combo.addItems(default_resolutions)
         
-        resolution_layout.addWidget(resolution_label)
-        resolution_layout.addWidget(self.resolution_combo)
-        params_layout.addLayout(resolution_layout)
+        # Sampler selection
+        sampler_layout = QHBoxLayout()
+        sampler_label = QLabel("Sampler:")
+        
+        # Create the appropriate control based on platform
+        if platform.system() == 'Darwin':  # macOS
+            self.sampler_combo = MacDropdownButton(SAMPLERS.keys())
+            # Set the initial text to show the selected option
+            sampler_list = list(SAMPLERS.keys())
+            if sampler_list:
+                self.sampler_combo.setText(f"{sampler_list[0]} ▼")
+        else:
+            self.sampler_combo = QComboBox()
+            self.sampler_combo.addItems(SAMPLERS.keys())
+            
+        sampler_layout.addWidget(sampler_label)
+        sampler_layout.addWidget(self.sampler_combo)
         
         # Number of steps
-        steps_layout = QVBoxLayout()
+        steps_layout = QHBoxLayout()
         steps_label = QLabel("Number of Steps:")
         self.steps_input = QSpinBox()
-        self.steps_input.setRange(1, 100)
+        self.steps_input.setRange(1, 150)
         self.steps_input.setValue(30)
         steps_layout.addWidget(steps_label)
         steps_layout.addWidget(self.steps_input)
-        params_layout.addLayout(steps_layout)
         
         # Guidance scale
-        guidance_layout = QVBoxLayout()
+        guidance_layout = QHBoxLayout()
         guidance_label = QLabel("Guidance Scale:")
         self.guidance_input = QDoubleSpinBox()
         self.guidance_input.setRange(1.0, 20.0)
@@ -871,37 +1024,20 @@ class MainWindow(QMainWindow):
         self.guidance_input.setSingleStep(0.5)
         guidance_layout.addWidget(guidance_label)
         guidance_layout.addWidget(self.guidance_input)
-        params_layout.addLayout(guidance_layout)
         
-        # Seed input
-        seed_layout = QVBoxLayout()
+        # Seed
+        seed_layout = QHBoxLayout()
         seed_label = QLabel("Seed:")
-        seed_control_layout = QHBoxLayout()
-        self.seed_input = QSpinBox()
-        self.seed_input.setRange(-1, 2147483647)  # Max int32 value
-        self.seed_input.setValue(-1)  # -1 means random seed
-        self.seed_input.setToolTip("Use -1 for random seed")
-        self.random_seed_button = QPushButton("🎲")  # Dice emoji for random
-        self.random_seed_button.setToolTip("Generate random seed")
-        self.random_seed_button.setMaximumWidth(30)
-        self.random_seed_button.clicked.connect(self.generate_random_seed)
-        seed_control_layout.addWidget(self.seed_input)
-        seed_control_layout.addWidget(self.random_seed_button)
+        self.seed_input = QLineEdit("-1")
+        self.seed_input.setPlaceholderText("Enter seed or -1 for random")
+        random_seed_button = QPushButton("Random")
+        random_seed_button.clicked.connect(self.generate_random_seed)
         seed_layout.addWidget(seed_label)
-        seed_layout.addLayout(seed_control_layout)
-        params_layout.addLayout(seed_layout)
-        
-        # Sampler selection
-        sampler_layout = QVBoxLayout()
-        sampler_label = QLabel("Sampler:")
-        self.sampler_combo = QComboBox()
-        self.sampler_combo.addItems(SAMPLERS.keys())
-        sampler_layout.addWidget(sampler_label)
-        sampler_layout.addWidget(self.sampler_combo)
-        params_layout.addLayout(sampler_layout)
+        seed_layout.addWidget(self.seed_input)
+        seed_layout.addWidget(random_seed_button)
         
         # Batch size
-        batch_layout = QVBoxLayout()
+        batch_layout = QHBoxLayout()
         batch_label = QLabel("Batch Size:")
         self.batch_input = QSpinBox()
         self.batch_input.setRange(1, 10)  # Allow generating up to 10 images at once
@@ -911,37 +1047,43 @@ class MainWindow(QMainWindow):
         batch_layout.addWidget(self.batch_input)
         params_layout.addLayout(batch_layout)
         
+        params_layout.addLayout(resolution_layout)
+        params_layout.addLayout(steps_layout)
+        params_layout.addLayout(guidance_layout)
+        params_layout.addLayout(seed_layout)
+        params_layout.addLayout(sampler_layout)
+        
         input_layout.addLayout(params_layout)
-        layout.addLayout(input_layout)
+        main_layout.addLayout(input_layout)
         
         # Generate button
         self.generate_button = QPushButton("Generate Images")
         self.generate_button.clicked.connect(self.generate_image)
-        layout.addWidget(self.generate_button)
+        main_layout.addWidget(self.generate_button)
         
         # Status label
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.status_label)
+        main_layout.addWidget(self.status_label)
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
-        layout.addWidget(self.progress_bar)
+        main_layout.addWidget(self.progress_bar)
         
         # Image display
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumSize(512, 512)
         self.image_label.setStyleSheet("border: 1px solid #ccc;")
-        layout.addWidget(self.image_label)
+        main_layout.addWidget(self.image_label)
         
         # Create save button
         self.save_button = QPushButton("Save Image to Custom Location")
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
-        layout.addWidget(self.save_button)
+        main_layout.addWidget(self.save_button)
         
         self.current_images = []
         self.generation_thread = None
@@ -964,6 +1106,76 @@ class MainWindow(QMainWindow):
         # Initialize with the default model
         default_model = "Stable Diffusion 1.5"
         self.on_model_changed(default_model)
+        
+        # Platform-specific styling for macOS
+        if platform.system() == 'Darwin':  # macOS
+            # Create a comprehensive macOS style sheet
+            mac_style = """
+                /* Global styles */
+                QWidget {
+                    font-size: 13px;
+                }
+                
+                /* Line edit styling */
+                QLineEdit {
+                    padding: 5px;
+                    min-height: 25px;
+                    border: 1px solid #888;
+                    border-radius: 4px;
+                    background-color: #333;
+                }
+                
+                /* Button styling */
+                QPushButton {
+                    padding: 5px 10px;
+                    min-height: 25px;
+                    border: 1px solid #888;
+                    border-radius: 4px;
+                    background-color: #444;
+                }
+                QPushButton:hover {
+                    background-color: #555;
+                }
+                
+                /* Tab widget styling */
+                QTabWidget::pane {
+                    border: 1px solid #888;
+                    border-radius: 4px;
+                    top: -1px;
+                    padding: 5px;
+                }
+                QTabBar::tab {
+                    font-size: 13px;
+                    padding: 6px 12px;
+                    min-width: 120px;
+                    background-color: #333;
+                    border: 1px solid #555;
+                    border-bottom: none;
+                    margin-right: 2px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #444;
+                    border: 1px solid #888;
+                    border-bottom: none;
+                }
+                
+                /* Spin box styling */
+                QSpinBox, QDoubleSpinBox {
+                    padding: 4px;
+                    min-height: 25px;
+                    border: 1px solid #888;
+                    border-radius: 4px;
+                    background-color: #333;
+                }
+            """
+            
+            # Apply specific styles to critical elements
+            self.setStyleSheet(mac_style)
+            
+            # Add more spacing for macOS layout
+            for layout in [model_layout, prompt_layout, neg_prompt_layout, params_layout]:
+                layout.setSpacing(8)
+                layout.setContentsMargins(4, 4, 4, 4)
 
     def initialize_counter(self):
         """Find the highest counter value from existing files in the outputs directory"""
@@ -1086,6 +1298,12 @@ class MainWindow(QMainWindow):
         # Cancel any running generation thread
         self.stop_generation_if_running()
         
+        # Make sure the combo box display is updated properly (especially important on macOS)
+        if platform.system() == 'Darwin':
+            index = self.model_combo.findText(model_name)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
+        
         model_config = AVAILABLE_MODELS[model_name]
         self.model_info.setText(model_config["description"])
         self.guidance_input.setValue(model_config["default_guidance_scale"])
@@ -1148,7 +1366,7 @@ class MainWindow(QMainWindow):
     def generate_random_seed(self):
         """Generate a random seed value"""
         random_seed = random.randint(0, 2147483647)
-        self.seed_input.setValue(random_seed)
+        self.seed_input.setText(str(random_seed))
         
     def generate_image(self):
         if not self.prompt_input.text():
@@ -1188,13 +1406,20 @@ class MainWindow(QMainWindow):
             print(f"Selected resolution '{selected_resolution}' not found in model presets. Using '{first_preset}' instead.")
         
         # Process seed value (-1 means random/None)
-        seed_value = self.seed_input.value()
-        if seed_value == -1:
+        seed_value = self.seed_input.text()
+        if seed_value == "-1":
             seed_value = None
             self.status_label.setText("Generating with random seed...")
         else:
-            self.status_label.setText(f"Generating with seed: {seed_value}...")
-            
+            try:
+                seed_value = int(seed_value)
+                self.status_label.setText(f"Generating with seed: {seed_value}...")
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Seed Format", "Please enter a valid integer seed or -1 for a random seed.")
+                self.generate_button.setEnabled(True)
+                self.progress_bar.setVisible(False)
+                return
+        
         # Get selected sampler
         sampler_name = self.sampler_combo.currentText()
         sampler_id = SAMPLERS.get(sampler_name)
@@ -1457,6 +1682,12 @@ class MainWindow(QMainWindow):
         if not model_name or model_name not in LOCAL_MODELS:
             return
 
+        # Make sure the combo box display is updated properly (especially important on macOS)
+        if platform.system() == 'Darwin':
+            index = self.local_model_combo.findText(model_name)
+            if index >= 0:
+                self.local_model_combo.setCurrentIndex(index)
+
         model_info = LOCAL_MODELS[model_name]
         config = model_info.get_config()
         
@@ -1526,79 +1757,31 @@ class MainWindow(QMainWindow):
             self.model_info.setText("No local models available. Use 'Manage Models' to add one.")
             
     def refresh_ollama_models(self):
-        """Refresh the list of Ollama models"""
-        # Check if Ollama is available now (may have been started after app launch)
-        ollama_available_now = self.ollama_client.is_available()
+        # Fetch available models from Ollama
+        self.ollama_models = []
+        try:
+            response = requests.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                models_data = response.json()
+                self.ollama_models = [model['name'] for model in models_data['models']]
+            else:
+                QMessageBox.warning(
+                    self, "Connection Error", 
+                    f"Failed to connect to Ollama API. Status code: {response.status_code}"
+                )
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Connection Error", 
+                f"Failed to connect to Ollama API: {str(e)}"
+            )
         
-        # If Ollama wasn't available before but is now, we need to create the UI
-        if not self.ollama_available and ollama_available_now:
-            self.ollama_available = True
-            
-            # Find the input_layout (parent of the parameters_layout)
-            for i in range(self.centralWidget().layout().count()):
-                item = self.centralWidget().layout().itemAt(i)
-                if isinstance(item, QVBoxLayout) and item != self.centralWidget().layout():
-                    input_layout = item
-                    break
-            
-            # Create and add the Ollama UI
-            ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_layout = QVBoxLayout()
-            
-            # Model selection
-            ollama_model_layout = QHBoxLayout()
-            ollama_model_label = QLabel("Ollama Model:")
-            self.ollama_model_combo = QComboBox()
-            refresh_ollama_button = QPushButton("Refresh")
-            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
-            ollama_model_layout.addWidget(ollama_model_label)
-            ollama_model_layout.addWidget(self.ollama_model_combo)
-            ollama_model_layout.addWidget(refresh_ollama_button)
-            ollama_layout.addLayout(ollama_model_layout)
-            
-            # Input mode selection
-            input_mode_layout = QHBoxLayout()
-            self.description_radio = QRadioButton("Description to Tags")
-            self.tags_radio = QRadioButton("Enhance Tags")
-            self.tags_radio.setChecked(True)  # Default to tag enhancement
-            input_mode_layout.addWidget(self.description_radio)
-            input_mode_layout.addWidget(self.tags_radio)
-            ollama_layout.addLayout(input_mode_layout)
-            
-            # Enhance button and input for enhancement
-            enhance_layout = QHBoxLayout()
-            self.enhance_input = QLineEdit()
-            self.enhance_input.setPlaceholderText("Enter prompt to enhance")
-            self.enhance_button = QPushButton("Enhance Prompt")
-            self.enhance_button.clicked.connect(self.enhance_prompt)
-            enhance_layout.addWidget(self.enhance_input)
-            enhance_layout.addWidget(self.enhance_button)
-            ollama_layout.addLayout(enhance_layout)
-            
-            ollama_group.setLayout(ollama_layout)
-            input_layout.addWidget(ollama_group)
-            
-            # Get models
-            self.ollama_models = self.ollama_client.list_models()
-            self.ollama_model_combo.addItems(self.ollama_models)
-            
-            # Show a message
-            self.status_label.setText("Ollama connected successfully")
-            
-        elif self.ollama_available:
-            # If Ollama was already available, just refresh the model list
-            self.ollama_models = self.ollama_client.list_models()
-            current_model = self.ollama_model_combo.currentText()
-            
+        # Update the model dropdown
+        if platform.system() == 'Darwin':  # macOS
             self.ollama_model_combo.clear()
             self.ollama_model_combo.addItems(self.ollama_models)
-            
-            # Try to restore previous selection if it exists
-            index = self.ollama_model_combo.findText(current_model)
-            if index >= 0:
-                self.ollama_model_combo.setCurrentIndex(index)
-                
-            self.status_label.setText("Ollama models refreshed")
+        else:
+            self.ollama_model_combo.clear()
+            self.ollama_model_combo.addItems(self.ollama_models)
     
     def update_model_info_from_tabs(self):
         """Update model info when switching between Hugging Face and Local models tabs"""
@@ -1620,7 +1803,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Enhancing prompt with Ollama...")
         
         # Get the selected model and mode
-        model = self.ollama_model_combo.currentText()
+        if platform.system() == 'Darwin':  # macOS
+            model = self.ollama_model_combo.currentText()
+        else:
+            model = self.ollama_model_combo.currentText()
+            
         mode = "description" if self.description_radio.isChecked() else "tags"
         
         # Create and start the Ollama thread
@@ -2068,6 +2255,228 @@ class LocalModelsDialog(QDialog):
                 del LOCAL_MODELS[model_name]
                 self.refresh_models_list()
                 self.models_updated.emit()
+
+# Custom MacOS Combo Box that fixes selection issues
+class MacComboBox(QComboBox):
+    """Custom combo box for macOS that ensures dropdowns work properly"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Use editable combo box with read-only behavior to fix macOS dropdown issues
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("""
+            QComboBox {
+                padding: 5px;
+                border: 1px solid #AAA;
+                border-radius: 4px;
+                background-color: #333;
+                color: white;
+            }
+            QComboBox::drop-down {
+                width: 20px;
+                background-color: #444;
+                border-left: 1px solid #888;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #333;
+                border: 1px solid #AAA;
+                selection-background-color: #666;
+                selection-color: white;
+                color: white;
+            }
+            QComboBox QLineEdit {
+                background-color: #333;
+                color: white;
+                border: none;
+                selection-background-color: #666;
+            }
+        """)
+        
+    def showPopup(self):
+        """Ensure popup displays correctly on macOS"""
+        super().showPopup()
+        # Force alternating row colors for better visibility
+        self.view().setAlternatingRowColors(True)
+
+class MacDropdownDialog(QDialog):
+    """A dialog-based dropdown for macOS that's more reliable than QMenu or QComboBox"""
+    
+    def __init__(self, items, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.selected_item = None
+        
+        # Create layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Create list widget
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet("""
+            QListWidget {
+                background-color: #333;
+                color: white;
+                border: 2px solid #888;
+                font-size: 14px;
+            }
+            QListWidget::item {
+                padding: 8px 20px;
+            }
+            QListWidget::item:selected, QListWidget::item:hover {
+                background-color: #666;
+            }
+        """)
+        
+        # Add items
+        for item in items:
+            self.list_widget.addItem(item)
+        
+        # Connect signal
+        self.list_widget.itemClicked.connect(self.on_item_clicked)
+        
+        # Add to layout
+        layout.addWidget(self.list_widget)
+        
+        # Set size
+        self.setMinimumWidth(300)
+        self.setMaximumHeight(400)
+        
+    def on_item_clicked(self, item):
+        self.selected_item = item.text()
+        self.accept()
+
+class MacDropdownButton(QPushButton):
+    """Button-based dropdown for macOS that uses a dialog for selection"""
+    
+    # Define a proper PyQt signal
+    currentTextChanged = pyqtSignal(str)
+    
+    def __init__(self, items=None, parent=None):
+        super().__init__(parent)
+        
+        # Make sure the button has adequate size and visibility
+        self.setMinimumHeight(35)
+        self.setMinimumWidth(200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        
+        # Add arrow indicator with high visibility text
+        self.setText("▼ Click to Select")
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        
+        # Highly visible styling with brighter colors
+        self.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding: 8px 25px 8px 10px;
+                border: 2px solid #888;
+                border-radius: 4px;
+                background-color: #444;
+                color: white;
+                min-height: 35px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #555;
+                border-color: #aaa;
+            }
+            QPushButton:pressed {
+                background-color: #666;
+            }
+        """)
+        
+        self._items = []
+        self._current_text = ""
+        self._current_index = -1
+        
+        # Connect our own click handler
+        self.clicked.connect(self._show_dropdown)
+        
+        # Initialize with items if provided
+        if items:
+            self.addItems(items)
+    
+    def _show_dropdown(self):
+        """Show a dialog-based dropdown when button is clicked"""
+        if not self._items:
+            return
+            
+        # Create the dialog
+        dialog = MacDropdownDialog(self._items, self)
+        
+        # Position the dialog under the button
+        pos = self.mapToGlobal(self.rect().bottomLeft())
+        dialog.move(pos)
+        
+        # Show the dialog modally
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_item:
+            index = self._items.index(dialog.selected_item)
+            self._on_item_selected(index, dialog.selected_item)
+    
+    def addItems(self, items):
+        """Add multiple items to the dropdown"""
+        self._items.extend(items)
+        
+        # Set initial text if we have items and no current selection
+        if items and not self._current_text:
+            self.setCurrentIndex(0)
+    
+    def addItem(self, item):
+        """Add a single item to the dropdown"""
+        self.addItems([item])
+    
+    def _on_item_selected(self, index, text):
+        """Handle item selection"""
+        self._current_index = index
+        self._current_text = text
+        
+        # Update button text - keep the arrow but add the selection
+        self.setText(f"{text} ▼")
+        
+        # Emit the signal
+        self.currentTextChanged.emit(text)
+    
+    def currentText(self):
+        """Get the current selected text"""
+        return self._current_text
+    
+    def currentIndex(self):
+        """Get the current selected index"""
+        return self._current_index
+    
+    def setCurrentIndex(self, index):
+        """Set the current selection by index"""
+        if 0 <= index < len(self._items):
+            self._current_index = index
+            self._current_text = self._items[index]
+            self.setText(f"{self._current_text} ▼")
+    
+    def setCurrentText(self, text):
+        """Set the current selection by text"""
+        if text in self._items:
+            index = self._items.index(text)
+            self.setCurrentIndex(index)
+    
+    def clear(self):
+        """Clear all items"""
+        self._items = []
+        self._current_text = ""
+        self._current_index = -1
+        self.setText("▼ Click to Select")
+    
+    def count(self):
+        """Get the number of items"""
+        return len(self._items)
+    
+    def findText(self, text):
+        """Find the index of the given text"""
+        try:
+            return self._items.index(text)
+        except ValueError:
+            return -1
+    
+    # Remove the old currentTextChanged method that registered handlers
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
