@@ -1748,9 +1748,8 @@ class MainWindow(QMainWindow):
             # Update the image at this index
             self.current_images[index] = image
             
-            # Set the current image index to this index if not set
-            if self.current_image_index is None:
-                self.current_image_index = index
+            # Always set the current image index to the latest generated image
+            self.current_image_index = index
             
             # Log the image generation
             # Get the seed from the generation thread
@@ -1759,9 +1758,8 @@ class MainWindow(QMainWindow):
             if image_path:
                 ErrorHandler.log_info(f"Automatically saved image {index+1}/{total} to {image_path}")
                 
-            # Display the image if we're currently viewing this index
-            if self.current_image_index == index:
-                self.display_image(index)
+            # Always display the latest generated image
+            self.display_image(index)
             
             # Update status
             self.status_label.setText(f"Generated image {index+1}/{total}")
