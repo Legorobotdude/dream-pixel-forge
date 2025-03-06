@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw, ImageChops
 import io
 import traceback
 from huggingface_hub import scan_cache_dir, HfFolder, model_info
@@ -1250,6 +1250,14 @@ class MainWindow(QMainWindow):
         app_icon_action.triggered.connect(self.apply_app_icon_preset)
         presets_menu.addAction(app_icon_action)
         
+        # Post Processing menu
+        post_processing_menu = menu_bar.addMenu("Post Processing")
+        
+        # App Icon Post-Processing action
+        post_process_action = QAction("App Icon Processing", self)
+        post_process_action.triggered.connect(self.post_process_app_icon)
+        post_processing_menu.addAction(post_process_action)
+    
     def import_model(self):
         """Open dialog to import a model file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -2007,8 +2015,286 @@ class MainWindow(QMainWindow):
             "• Describe your app purpose clearly in the prompt\n"
             "• Use terms like 'minimal', 'clean', 'flat design', or 'professional'\n"
             "• Generate multiple versions and pick the best one\n"
-            "• For specific platforms add 'ios app icon' or 'android app icon'"
+            "• For specific platforms add 'ios app icon' or 'android app icon'\n\n"
+            "After generating, use 'App Icon Processing' from the Post Processing menu to add rounded corners and create multiple sizes."
         )
+    
+    def post_process_app_icon(self):
+        """Apply post-processing to app icons including rounded corners and rescaling"""
+        if not self.current_images or len(self.current_images) == 0 or self.current_image_index is None:
+            QMessageBox.warning(
+                self,
+                "No Image Available",
+                "Please generate an image first before using the post-processing options."
+            )
+            return
+        
+        # Create a dialog for post-processing options
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Post-Process App Icon")
+        dialog.setModal(True)
+        
+        # Set dialog size
+        dialog.resize(450, 500)
+        
+        # Create layout
+        layout = QVBoxLayout(dialog)
+        
+        # Create form layout for options
+        form_layout = QFormLayout()
+        
+        # Rounded corners option
+        corner_radius_label = QLabel("Corner Radius (%):")
+        corner_radius_slider = QSpinBox()
+        corner_radius_slider.setRange(0, 50)
+        corner_radius_slider.setValue(20)
+        corner_radius_slider.setSingleStep(5)
+        corner_radius_slider.setToolTip("0% = Square, 50% = Full rounded corners")
+        form_layout.addRow(corner_radius_label, corner_radius_slider)
+        
+        # Platform selection
+        platform_label = QLabel("Target Platform:")
+        platform_combo = QComboBox()
+        platform_combo.addItems(["iOS", "Android", "Windows", "macOS", "All Platforms"])
+        platform_combo.setCurrentText("iOS")
+        form_layout.addRow(platform_label, platform_combo)
+        
+        # Output directory
+        output_dir_layout = QHBoxLayout()
+        output_dir_label = QLabel("Output Directory:")
+        output_dir_input = QLineEdit()
+        output_dir_input.setText(os.path.join(self.outputs_dir, "app_icons"))
+        output_dir_button = QPushButton("Browse...")
+        
+        # Connect browse button
+        output_dir_button.clicked.connect(lambda: output_dir_input.setText(
+            QFileDialog.getExistingDirectory(dialog, "Select Output Directory", output_dir_input.text())
+        ))
+        
+        output_dir_layout.addWidget(output_dir_input)
+        output_dir_layout.addWidget(output_dir_button)
+        form_layout.addRow(output_dir_label, output_dir_layout)
+        
+        # Preview section
+        preview_label = QLabel("Preview:")
+        preview_image = QLabel()
+        preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_image.setMinimumSize(200, 200)
+        preview_image.setMaximumSize(200, 200)
+        preview_image.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
+        
+        # Create a function to update preview
+        def update_preview():
+            try:
+                if not self.current_images or self.current_image_index is None:
+                    return
+                
+                # Get the current image
+                img = self.current_images[self.current_image_index].copy()
+                
+                # Apply corner radius
+                radius_percent = corner_radius_slider.value()
+                img = self.apply_corner_radius(img, radius_percent)
+                
+                # Convert to QPixmap for display
+                img_data = img.convert("RGBA").tobytes("raw", "RGBA")
+                qimage = QImage(img_data, img.width, img.height, img.width * 4, QImage.Format.Format_RGBA8888)
+                pixmap = QPixmap.fromImage(qimage)
+                
+                # Scale pixmap to fit the preview label while maintaining aspect ratio
+                pixmap = pixmap.scaled(preview_image.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                
+                # Display the preview
+                preview_image.setPixmap(pixmap)
+            except Exception as e:
+                print(f"Error updating preview: {str(e)}")
+        
+        # Connect slider to update preview
+        corner_radius_slider.valueChanged.connect(update_preview)
+        
+        # Add process button
+        process_button = QPushButton("Process Icon")
+        
+        # Connect process button
+        def process_icon():
+            try:
+                if not self.current_images or self.current_image_index is None:
+                    return
+                
+                # Get options
+                radius_percent = corner_radius_slider.value()
+                target_platform = platform_combo.currentText()
+                output_directory = output_dir_input.text()
+                
+                # Create output directory if it doesn't exist
+                os.makedirs(output_directory, exist_ok=True)
+                
+                # Get base icon name from the prompt or counter
+                base_name = "_".join(self.prompt_input.text().split()[:3]).lower()
+                base_name = ''.join(c for c in base_name if c.isalnum() or c == '_')
+                if not base_name:
+                    base_name = f"app_icon_{MainWindow.generation_counter:04d}"
+                
+                # Get the current image
+                img = self.current_images[self.current_image_index].copy()
+                
+                # Apply corner radius
+                img = self.apply_corner_radius(img, radius_percent)
+                
+                # Get resolutions based on platform
+                resolutions = self.get_platform_resolutions(target_platform)
+                
+                # Process and save all resolutions
+                processed_files = []
+                for resolution_name, size in resolutions.items():
+                    # Resize image
+                    resized_img = img.resize(size, Image.Resampling.LANCZOS)
+                    
+                    # Create filename
+                    filename = f"{base_name}_{resolution_name}.png"
+                    filepath = os.path.join(output_directory, filename)
+                    
+                    # Save image
+                    resized_img.save(filepath)
+                    processed_files.append(filepath)
+                
+                # Show success message
+                QMessageBox.information(
+                    dialog,
+                    "Processing Complete",
+                    f"Successfully processed {len(processed_files)} icon sizes and saved to:\n{output_directory}"
+                )
+                
+                # Open the folder in explorer
+                if IS_WINDOWS:
+                    os.startfile(output_directory)
+                elif IS_MACOS:
+                    import subprocess
+                    subprocess.call(["open", output_directory])
+                else:
+                    import subprocess
+                    subprocess.call(["xdg-open", output_directory])
+                
+                # Close dialog
+                dialog.accept()
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    dialog,
+                    "Error",
+                    f"An error occurred during processing: {str(e)}"
+                )
+        
+        process_button.clicked.connect(process_icon)
+        
+        # Add cancel button
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(dialog.reject)
+        
+        # Create button layout
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(process_button)
+        button_layout.addWidget(cancel_button)
+        
+        # Add layouts to main layout
+        layout.addLayout(form_layout)
+        layout.addWidget(preview_label)
+        layout.addWidget(preview_image)
+        layout.addLayout(button_layout)
+        
+        # Update the preview initially
+        QTimer.singleShot(100, update_preview)
+        
+        # Show dialog
+        dialog.exec()
+    
+    def apply_corner_radius(self, img, radius_percent):
+        """Apply rounded corners to an image with the specified radius percentage"""
+        # Make a copy to avoid modifying the original
+        img = img.copy()
+        
+        # Convert to RGBA if not already
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        
+        # Calculate radius in pixels (percentage of the smallest dimension)
+        width, height = img.size
+        min_dimension = min(width, height)
+        radius = int(min_dimension * radius_percent / 100)
+        
+        # Don't do anything if radius is too small
+        if radius < 1:
+            return img
+        
+        # Create a transparent image with the same size
+        rounded_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        
+        # Create a mask with rounded corners
+        mask = Image.new('L', (width, height), 0)
+        draw = ImageDraw.Draw(mask)
+        
+        # Drawing rounded rectangle manually for compatibility with older Pillow versions
+        # Draw the rectangles for the middle sections
+        draw.rectangle([(radius, 0), (width - radius, height)], fill=255)  # Vertical rect
+        draw.rectangle([(0, radius), (width, height - radius)], fill=255)  # Horizontal rect
+        
+        # Draw the four corner circles
+        draw.pieslice([(0, 0), (radius * 2, radius * 2)], 180, 270, fill=255)  # Top-left
+        draw.pieslice([(width - radius * 2, 0), (width, radius * 2)], 270, 360, fill=255)  # Top-right
+        draw.pieslice([(0, height - radius * 2), (radius * 2, height)], 90, 180, fill=255)  # Bottom-left
+        draw.pieslice([(width - radius * 2, height - radius * 2), (width, height)], 0, 90, fill=255)  # Bottom-right
+        
+        # Paste the original image using the mask
+        rounded_img.paste(img, (0, 0), mask)
+        
+        return rounded_img
+    
+    def get_platform_resolutions(self, platform):
+        """Get common icon resolutions for the specified platform"""
+        resolutions = {}
+        
+        if platform == "iOS" or platform == "All Platforms":
+            # iOS App Icon sizes
+            resolutions.update({
+                "ios_60x60": (60, 60),
+                "ios_120x120": (120, 120), 
+                "ios_180x180": (180, 180),
+                "ios_1024x1024": (1024, 1024)  # App Store
+            })
+            
+        if platform == "Android" or platform == "All Platforms":
+            # Android App Icon sizes
+            resolutions.update({
+                "android_48x48": (48, 48),     # mdpi
+                "android_72x72": (72, 72),     # hdpi
+                "android_96x96": (96, 96),     # xhdpi
+                "android_144x144": (144, 144), # xxhdpi
+                "android_192x192": (192, 192), # xxxhdpi
+                "android_512x512": (512, 512)  # Play Store
+            })
+            
+        if platform == "Windows" or platform == "All Platforms":
+            # Windows App Icon sizes
+            resolutions.update({
+                "windows_44x44": (44, 44),
+                "windows_71x71": (71, 71),
+                "windows_150x150": (150, 150),
+                "windows_310x310": (310, 310)
+            })
+            
+        if platform == "macOS" or platform == "All Platforms":
+            # macOS App Icon sizes
+            resolutions.update({
+                "macos_16x16": (16, 16),
+                "macos_32x32": (32, 32),
+                "macos_64x64": (64, 64),
+                "macos_128x128": (128, 128),
+                "macos_256x256": (256, 256),
+                "macos_512x512": (512, 512),
+                "macos_1024x1024": (1024, 1024)
+            })
+            
+        return resolutions
     
     def save_image(self):
         """Save the generated image(s)"""

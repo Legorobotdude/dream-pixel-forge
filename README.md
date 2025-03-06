@@ -29,6 +29,8 @@ A modern GUI application for running multiple AI image generation models locally
 - Real-time progress tracking
 - Clear feedback during model downloads
 - Support for local models from Civitai and other sources
+- **App Icon Generation** presets for professional icon creation
+- **Icon Post-Processing** for rounded corners and platform-specific sizing
 
 ## Requirements
 
@@ -187,6 +189,42 @@ Use the "Manage Models" button to:
 - Import models from the models folder
 - Remove models from the registry (this doesn't delete the model files)
 - Auto-detection of Pony models with appropriate configuration
+
+## App Icon Generation
+
+DreamPixelForge includes specialized features for creating professional app icons:
+
+### App Icon Generation Preset
+
+1. Access the preset from the **Presets** menu → **App Icon Generator**
+2. This applies optimal settings for app icon generation:
+   - Square resolution (512x512 or 1024x1024 depending on model)
+   - Optimal steps (25) and guidance scale (7.0)
+   - Batch size of 4 to provide multiple options
+   - Specialized negative prompt to avoid text and common artifacts
+   - Sampler optimized for detailed icons
+
+3. The preset also enhances your prompt by adding app icon specific terms if needed
+4. You can then customize the prompt further to match your app's purpose
+
+### App Icon Post-Processing
+
+After generating your app icons, use the post-processing tool to prepare them for different platforms:
+
+1. Generate an icon using the App Icon Preset
+2. Go to **Post Processing** menu → **App Icon Processing**
+3. In the dialog, set:
+   - **Corner Radius** - Apply rounded corners from 0% (square) to 50% (fully rounded)
+   - **Target Platform** - iOS, Android, Windows, macOS, or All Platforms
+   - **Output Directory** - Where to save the processed icons
+
+4. The tool automatically:
+   - Applies the specified corner radius with proper transparency
+   - Generates all required sizes for the selected platform
+   - Names files according to platform conventions
+   - Preserves transparency for platforms that support it
+
+This workflow makes it easy to go from a text prompt to a complete set of properly sized and formatted icons for your application.
 
 ## Model-Specific Negative Prompts
 
