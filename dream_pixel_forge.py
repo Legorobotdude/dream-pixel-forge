@@ -1,37 +1,52 @@
 import sys
 import os
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                            QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                            QSpinBox, QDoubleSpinBox, QProgressBar, QFileDialog,
-                            QComboBox, QMessageBox, QGroupBox, QRadioButton, 
-                            QTabWidget, QListWidget, QListWidgetItem, QDialog,
-                            QFormLayout, QFrame, QStyle, QStyleOptionComboBox,
-                            QMenu, QCheckBox, QSizePolicy, QGridLayout,
-                            QScrollArea, QTextEdit, QSplitter)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
-from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
-import torch
-from PIL import Image, ImageDraw, ImageChops
-import io
-import traceback
-from huggingface_hub import scan_cache_dir, HfFolder, model_info
-import time
-import requests
-import json
-import random
-import glob
 import platform
+import time
 import logging
+import io
+import re
+import threading
+import glob
+import json
+import shutil
+import difflib
+import uuid
+import torch
+import traceback
+import requests
+import random
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageOps, ImageChops, ImageFilter
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, 
+                             QVBoxLayout, QHBoxLayout, QWidget, QPushButton, 
+                             QComboBox, QSpinBox, QDoubleSpinBox, QFileDialog,
+                             QMessageBox, QTabWidget, QProgressBar, QRadioButton,
+                             QDialog, QListWidget, QListWidgetItem, QDialogButtonBox,
+                             QFormLayout, QFrame, QStyle, QStyleOptionComboBox,
+                             QMenu, QCheckBox, QSizePolicy, QGridLayout,
+                             QScrollArea, QTextEdit, QSplitter, QGroupBox)
+from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QSize, 
+                         QPropertyAnimation, QEasingCurve)
+from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
+from diffusers import (StableDiffusionPipeline, StableDiffusionXLPipeline, 
+                      KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, 
+                      DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, 
+                      EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, 
+                      KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, 
+                      PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, 
+                      DPMSolverSDEScheduler, KarrasVeScheduler)
+from huggingface_hub import scan_cache_dir, HfFolder, model_info
+
+# Platform detection
+IS_MACOS = platform.system() == "Darwin"
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
 
 # Local models directory
 LOCAL_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
 
 # Detect macOS for MPS (Metal) support
-IS_MACOS = platform.system() == 'Darwin'
-IS_WINDOWS = platform.system() == 'Windows'
-IS_LINUX = platform.system() == 'Linux'
 HAS_MPS = False
 if IS_MACOS:
     try:
@@ -726,6 +741,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DreamPixelForge - Text to Image")
         self.setGeometry(100, 100, 1000, 800)  # Slightly smaller default size
         
+        # Apply theme
+        ThemeManager.apply_theme(QApplication.instance(), "dark")
+        
         # Create menu bar
         self.create_menu()
         
@@ -1095,6 +1113,7 @@ class MainWindow(QMainWindow):
         
         # Generate button
         self.generate_button = QPushButton("Generate Images")
+        self.generate_button.setObjectName("primaryButton")
         self.generate_button.setMinimumHeight(36)  # Slightly taller for emphasis
         self.generate_button.clicked.connect(self.generate_image)
         left_layout.addWidget(self.generate_button)
@@ -1313,55 +1332,123 @@ class MainWindow(QMainWindow):
             print(f"Error initializing counter: {str(e)}")
 
     def create_menu(self):
-        """Create the menu bar"""
-        # Create menu bar
-        menu_bar = self.menuBar()
+        """Create the application menu bar"""
+        menubar = self.menuBar()
         
         # File menu
-        file_menu = menu_bar.addMenu("File")
+        file_menu = menubar.addMenu("&File")
         
-        # Import model action
-        import_model_action = QAction("Import Model", self)
-        import_model_action.triggered.connect(self.import_model)
-        file_menu.addAction(import_model_action)
+        # New Image action
+        new_action = QAction("&New Image", self)
+        new_action.setShortcut("Ctrl+N")
+        file_menu.addAction(new_action)
         
-        # Manage models action
-        manage_models_action = QAction("Manage Models", self)
-        manage_models_action.triggered.connect(self.open_manage_models)
-        file_menu.addAction(manage_models_action)
+        # Open Image action
+        open_action = QAction("&Open Image", self)
+        open_action.setShortcut("Ctrl+O")
+        file_menu.addAction(open_action)
         
-        # Separator
+        # Add a separator
+        file_menu.addSeparator()
+        
+        # Save Image action
+        save_action = QAction("&Save Image", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_image)
+        file_menu.addAction(save_action)
+        
+        # Add a separator
+        file_menu.addSeparator()
+        
+        # Import Models submenu
+        import_submenu = QMenu("Import Models", self)
+        import_action = QAction("Import Model File...", self)
+        import_action.triggered.connect(self.import_model)
+        import_submenu.addAction(import_action)
+        
+        # Add import submenu to File menu
+        file_menu.addMenu(import_submenu)
+        
+        # Add a separator
         file_menu.addSeparator()
         
         # Exit action
-        exit_action = QAction("Exit", self)
+        exit_action = QAction("E&xit", self)
+        exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
-        # Models menu
-        models_menu = menu_bar.addMenu("Models")
+        # Edit menu
+        edit_menu = menubar.addMenu("&Edit")
         
-        # Open models folder action
-        open_folder_action = QAction("Open Models Folder", self)
-        open_folder_action.triggered.connect(self.open_models_folder)
-        models_menu.addAction(open_folder_action)
+        # Copy Image action
+        copy_action = QAction("&Copy Image", self)
+        copy_action.setShortcut("Ctrl+C")
+        edit_menu.addAction(copy_action)
         
-        # Presets menu
-        presets_menu = menu_bar.addMenu("Presets")
+        # Generate options menu
+        generate_menu = menubar.addMenu("&Generate")
         
-        # App Icon Generator action
-        app_icon_action = QAction("App Icon Generator", self)
-        app_icon_action.triggered.connect(self.apply_app_icon_preset)
-        presets_menu.addAction(app_icon_action)
+        # Start Generation action
+        start_action = QAction("&Start Generation", self)
+        start_action.setShortcut("Ctrl+G")
+        start_action.triggered.connect(self.generate_image)
+        generate_menu.addAction(start_action)
         
-        # Post Processing menu
-        post_processing_menu = menu_bar.addMenu("Post Processing")
+        # Add a separator
+        generate_menu.addSeparator()
         
-        # App Icon Post-Processing action
-        post_process_action = QAction("App Icon Processing", self)
-        post_process_action.triggered.connect(self.post_process_app_icon)
-        post_processing_menu.addAction(post_process_action)
-    
+        # Batch Size submenu
+        batch_menu = QMenu("Batch Size", self)
+        
+        # Create batch size options
+        for size in [1, 2, 4, 8]:
+            batch_action = QAction(f"{size} Image{'s' if size > 1 else ''}", self)
+            batch_action.setCheckable(True)
+            if size == 1:
+                batch_action.setChecked(True)
+            batch_menu.addAction(batch_action)
+        
+        generate_menu.addMenu(batch_menu)
+        
+        # View menu
+        view_menu = menubar.addMenu("&View")
+        
+        # Theme submenu
+        theme_menu = QMenu("Theme", self)
+        
+        # Dark theme action
+        dark_theme_action = QAction("Dark Theme", self)
+        dark_theme_action.setCheckable(True)
+        dark_theme_action.setChecked(True)
+        dark_theme_action.triggered.connect(lambda: ThemeManager.apply_theme(QApplication.instance(), "dark"))
+        theme_menu.addAction(dark_theme_action)
+        
+        # Light theme action
+        light_theme_action = QAction("Light Theme", self)
+        light_theme_action.setCheckable(True)
+        light_theme_action.triggered.connect(lambda: ThemeManager.apply_theme(QApplication.instance(), "light"))
+        theme_menu.addAction(light_theme_action)
+        
+        # Add theme menu to View menu
+        view_menu.addMenu(theme_menu)
+        
+        # Help menu
+        help_menu = menubar.addMenu("&Help")
+        
+        # About action
+        about_action = QAction("&About", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(about_action)
+
+    def show_about_dialog(self):
+        """Show about dialog"""
+        QMessageBox.about(self, "About DreamPixelForge",
+                         "DreamPixelForge v1.0\n\n"
+                         "A powerful AI image generation tool\n"
+                         "Based on Stable Diffusion\n\n"
+                         "© 2025 DreamPixelForge Team")
+
     def import_model(self):
         """Open dialog to import a model file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1636,6 +1723,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_label.setText("Generation complete! All images auto-saved to outputs folder.")
         
+        # Update navigation controls after all images are generated
+        batch_size = len(self.current_images)
+        if batch_size > 1 and all(img is not None for img in self.current_images):
+            # Make sure current_image_index is valid
+            if self.current_image_index is None:
+                self.current_image_index = 0
+                
+            # Ensure navigation buttons are properly enabled
+            if hasattr(self, 'prev_button') and hasattr(self, 'next_button'):
+                self.prev_button.setEnabled(self.current_image_index > 0)
+                self.next_button.setEnabled(self.current_image_index < batch_size - 1)
+                self.image_counter_label.setText(f"Image {self.current_image_index+1}/{batch_size}")
+                ErrorHandler.log_info(f"Updated navigation after completion. Current index: {self.current_image_index}, Total: {batch_size}")
+
     def handle_image_ready(self, image, index, total):
         """Handle individual image ready signal from generation thread"""
         def _ui_update_operation():
@@ -1647,6 +1748,10 @@ class MainWindow(QMainWindow):
             # Update the image at this index
             self.current_images[index] = image
             
+            # Set the current image index to this index if not set
+            if self.current_image_index is None:
+                self.current_image_index = index
+            
             # Log the image generation
             # Get the seed from the generation thread
             seed = self.generation_thread.generated_seeds[index] if hasattr(self.generation_thread, 'generated_seeds') and len(self.generation_thread.generated_seeds) > index else -1
@@ -1654,28 +1759,43 @@ class MainWindow(QMainWindow):
             if image_path:
                 ErrorHandler.log_info(f"Automatically saved image {index+1}/{total} to {image_path}")
                 
-            # Display the image
-            self.display_image(index)
+            # Display the image if we're currently viewing this index
+            if self.current_image_index == index:
+                self.display_image(index)
             
             # Update status
             self.status_label.setText(f"Generated image {index+1}/{total}")
             
             # Only show image navigation for multiple images
             if total > 1:
-                self._setup_image_navigation(index, total)
+                self._setup_image_navigation(self.current_image_index, total)
+                
+                # Update navigation buttons with proper state
+                if hasattr(self, 'prev_button') and hasattr(self, 'next_button'):
+                    # Count valid (non-None) images before and after current index
+                    has_prev = any(self.current_images[i] is not None for i in range(0, self.current_image_index))
+                    has_next = any(self.current_images[i] is not None for i in range(self.current_image_index + 1, total))
+                    
+                    self.prev_button.setEnabled(has_prev)
+                    self.next_button.setEnabled(has_next)
         
         # Use safe UI operation with error handling
         ErrorHandler.safe_ui_operation(self, _ui_update_operation, "Image Ready Error")
 
     def display_image(self, index):
         """Display an image at the specified index with proper error handling"""
-        if not self.current_images or index < 0 or index >= len(self.current_images):
+        if not self.current_images or index < 0 or index >= len(self.current_images) or self.current_images[index] is None:
             return
             
         def _display_operation():
             try:
                 # Get the image and convert to QPixmap
                 pil_image = self.current_images[index]
+                
+                # Safety check - ensure the image is not None
+                if pil_image is None:
+                    ErrorHandler.log_warning(f"Cannot display image at index {index}: Image is None")
+                    return
                 
                 # Convert PIL image to QPixmap
                 qim = QImage(pil_image.tobytes(), pil_image.width, pil_image.height, QImage.Format.Format_RGB888)
@@ -1714,6 +1834,10 @@ class MainWindow(QMainWindow):
                         if self.current_images and index < len(self.current_images):
                             # Convert PIL image to QPixmap
                             current_image = self.current_images[index]
+                            # Skip if image is None
+                            if current_image is None:
+                                return
+                            
                             qim = QImage(current_image.tobytes(), current_image.width, current_image.height, QImage.Format.Format_RGB888)
                             pixmap = QPixmap.fromImage(qim)
                             
@@ -1741,30 +1865,56 @@ class MainWindow(QMainWindow):
     def show_previous_image(self):
         """Show the previous image in the batch"""
         try:
-            if self.current_image_index > 0:
-                self.current_image_index -= 1
-                self.display_image(self.current_image_index)
+            # Check that we have valid current_image_index and images
+            if self.current_image_index is None or not self.current_images:
+                return
+            
+            # Find the previous valid (non-None) image
+            prev_index = self.current_image_index - 1
+            while prev_index >= 0:
+                if self.current_images[prev_index] is not None:
+                    self.current_image_index = prev_index
+                    self.display_image(self.current_image_index)
+                    
+                    # Update navigation buttons
+                    if hasattr(self, 'image_counter_label'):
+                        self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+                        self.prev_button.setEnabled(self.current_image_index > 0)
+                        self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+                    return
+                prev_index -= 1
                 
-                # Update navigation buttons
-                if hasattr(self, 'image_counter_label'):
-                    self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
-                    self.prev_button.setEnabled(self.current_image_index > 0)
-                    self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+            # If we got here, no previous valid image was found
+            self.prev_button.setEnabled(False)
+                
         except Exception as e:
             ErrorHandler.handle_ui_error(self, e, "Navigation Error")
 
     def show_next_image(self):
         """Show the next image in the batch"""
         try:
-            if self.current_image_index < len(self.current_images) - 1:
-                self.current_image_index += 1
-                self.display_image(self.current_image_index)
+            # Check that we have valid current_image_index and images
+            if self.current_image_index is None or not self.current_images:
+                return
+            
+            # Find the next valid (non-None) image
+            next_index = self.current_image_index + 1
+            while next_index < len(self.current_images):
+                if self.current_images[next_index] is not None:
+                    self.current_image_index = next_index
+                    self.display_image(self.current_image_index)
+                    
+                    # Update navigation buttons
+                    if hasattr(self, 'image_counter_label'):
+                        self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
+                        self.prev_button.setEnabled(self.current_image_index > 0)
+                        self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+                    return
+                next_index += 1
                 
-                # Update navigation buttons
-                if hasattr(self, 'image_counter_label'):
-                    self.image_counter_label.setText(f"Image {self.current_image_index+1}/{len(self.current_images)}")
-                    self.prev_button.setEnabled(self.current_image_index > 0)
-                    self.next_button.setEnabled(self.current_image_index < len(self.current_images) - 1)
+            # If we got here, no next valid image was found
+            self.next_button.setEnabled(False)
+                
         except Exception as e:
             ErrorHandler.handle_ui_error(self, e, "Navigation Error")
             
@@ -3151,6 +3301,7 @@ class CollapsibleSection(QWidget):
         
         # Header layout with toggle button
         self.header_widget = QWidget()
+        self.header_widget.setObjectName("sectionHeader")
         self.header_layout = QHBoxLayout(self.header_widget)
         self.header_layout.setContentsMargins(5, 5, 5, 5)
         
@@ -3164,15 +3315,19 @@ class CollapsibleSection(QWidget):
         
         # Title label
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("font-weight: bold;")
+        self.title_label.setObjectName("sectionTitle")
         
         # Add to header layout
         self.header_layout.addWidget(self.toggle_button)
         self.header_layout.addWidget(self.title_label)
         self.header_layout.addStretch()
         
+        # Make entire header clickable
+        self.header_widget.mousePressEvent = self.header_clicked
+        
         # Content widget
         self.content_widget = QWidget()
+        self.content_widget.setObjectName("sectionContent")
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(25, 5, 5, 5)  # Indent content
         
@@ -3183,30 +3338,55 @@ class CollapsibleSection(QWidget):
         # Set initial state (collapsed)
         self.content_widget.setVisible(False)
         
-        # Style for macOS
-        self.setStyleSheet("""
-            #collapsibleSection {
-                border: 1px solid #666;
-                border-radius: 3px;
-                background-color: #333;
-                margin: 2px;
-            }
-            #disclosureTriangle {
-                background-color: transparent;
-                border: none;
-                color: #ccc;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            #disclosureTriangle:hover {
-                color: white;
-            }
-        """)
+        # Animation
+        self.animation = QPropertyAnimation(self.content_widget, b"maximumHeight")
+        self.animation.setDuration(200)  # 200ms for animation
+        self.animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        
+        # Flag to track initial expansion
+        self.initial_expansion = True
+    
+    def header_clicked(self, event):
+        """Handle click on the header"""
+        self.toggle_button.click()
+        # Call the original mousePressEvent
+        QWidget.mousePressEvent(self.header_widget, event)
     
     def on_toggle(self, checked):
-        """Toggle visibility of content"""
-        self.content_widget.setVisible(checked)
-        self.toggle_button.setText("▼" if checked else "▶")  # Down arrow when expanded, right arrow when collapsed
+        """Toggle visibility of content with animation"""
+        if checked:
+            self.toggle_button.setText("▼")  # Down arrow when expanded
+            
+            if self.initial_expansion:
+                # For initial expansion on app start, skip animation for better UX
+                self.content_widget.setVisible(True)
+                self.content_widget.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+                self.initial_expansion = False
+            else:
+                # Prepare for animation
+                self.content_widget.setMaximumHeight(0)
+                self.content_widget.setVisible(True)
+                
+                # Calculate required height
+                height = self.content_layout.sizeHint().height()
+                
+                # Configure animation
+                self.animation.setStartValue(0)
+                self.animation.setEndValue(height)
+                self.animation.start()
+        else:
+            self.toggle_button.setText("▶")  # Right arrow when collapsed
+            self.initial_expansion = False  # Reset flag as section has been manually collapsed
+            
+            # Configure animation
+            current_height = self.content_widget.height()
+            self.animation.setStartValue(current_height)
+            self.animation.setEndValue(0)
+            self.animation.start()
+            
+            # Connect to animation finished signal to hide widget
+            self.animation.finished.connect(lambda: self.content_widget.setVisible(False))
+            self.animation.finished.connect(lambda: self.animation.finished.disconnect())
     
     def addWidget(self, widget):
         """Add a widget to the content layout"""
@@ -3215,6 +3395,478 @@ class CollapsibleSection(QWidget):
     def addLayout(self, layout):
         """Add a layout to the content layout"""
         self.content_layout.addLayout(layout)
+
+class ThemeManager:
+    """Manages application themes and styles"""
+    
+    # Theme definitions
+    THEMES = {
+        "dark": {
+            "name": "Dark Theme",
+            "colors": {
+                "background": "#1e1e1e",
+                "card_background": "#2d2d2d",
+                "text_primary": "#ffffff",
+                "text_secondary": "#aaaaaa",
+                "accent": "#5b9bd5",
+                "accent_hover": "#70b8ff",
+                "border": "#444444",
+                "input_background": "#333333",
+                "button_background": "#444444",
+                "button_hover": "#555555",
+                "success": "#4caf50",
+                "warning": "#ff9800",
+                "error": "#f44336",
+                "progress": "#5b9bd5",
+                "disabled": "#666666",
+            },
+            "borders": {
+                "radius": "4px",
+                "width": "1px",
+            },
+            "spacing": {
+                "small": "4px",
+                "medium": "8px",
+                "large": "16px",
+            },
+            "fonts": {
+                "family": "'Segoe UI', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif",
+                "size_small": "11px",
+                "size_normal": "13px",
+                "size_large": "15px",
+                "size_header": "16px",
+            }
+        },
+        "light": {
+            "name": "Light Theme",
+            "colors": {
+                "background": "#f5f5f5",
+                "card_background": "#ffffff",
+                "text_primary": "#333333",
+                "text_secondary": "#666666",
+                "accent": "#0078d4",
+                "accent_hover": "#106ebe",
+                "border": "#d1d1d1",
+                "input_background": "#ffffff",
+                "button_background": "#e6e6e6",
+                "button_hover": "#d1d1d1",
+                "success": "#4caf50",
+                "warning": "#ff9800",
+                "error": "#f44336",
+                "progress": "#0078d4",
+                "disabled": "#c8c8c8",
+            },
+            "borders": {
+                "radius": "4px",
+                "width": "1px",
+            },
+            "spacing": {
+                "small": "4px",
+                "medium": "8px",
+                "large": "16px",
+            },
+            "fonts": {
+                "family": "'Segoe UI', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif",
+                "size_small": "11px",
+                "size_normal": "13px",
+                "size_large": "15px",
+                "size_header": "16px",
+            }
+        }
+    }
+    
+    @classmethod
+    def get_theme(cls, theme_name="dark"):
+        """Get a theme by name"""
+        return cls.THEMES.get(theme_name, cls.THEMES["dark"])
+    
+    @classmethod
+    def get_stylesheet(cls, theme_name="dark"):
+        """Generate a complete stylesheet for the specified theme"""
+        theme = cls.get_theme(theme_name)
+        colors = theme["colors"]
+        borders = theme["borders"]
+        spacing = theme["spacing"]
+        fonts = theme["fonts"]
+        
+        # Core application style
+        stylesheet = f"""
+            /* Global Application Styling */
+            QWidget {{
+                background-color: {colors["background"]};
+                color: {colors["text_primary"]};
+                font-family: {fonts["family"]};
+                font-size: {fonts["size_normal"]};
+                margin: 0;
+                padding: 0;
+            }}
+            
+            /* Main Window */
+            QMainWindow {{
+                background-color: {colors["background"]};
+            }}
+            
+            /* Buttons */
+            QPushButton {{
+                background-color: {colors["button_background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                padding: {spacing["medium"]} {spacing["large"]};
+                font-size: {fonts["size_normal"]};
+                min-height: 28px;
+            }}
+            
+            QPushButton:hover {{
+                background-color: {colors["button_hover"]};
+                border-color: {colors["accent"]};
+            }}
+            
+            QPushButton:pressed {{
+                background-color: {colors["accent"]};
+                color: white;
+            }}
+            
+            QPushButton:disabled {{
+                background-color: {colors["background"]};
+                color: {colors["disabled"]};
+                border-color: {colors["border"]};
+            }}
+            
+            /* Primary action button */
+            QPushButton#primaryButton {{
+                background-color: {colors["accent"]};
+                color: white;
+                font-weight: bold;
+                min-height: 36px;
+            }}
+            
+            QPushButton#primaryButton:hover {{
+                background-color: {colors["accent_hover"]};
+            }}
+            
+            /* Custom collapsible section styling */
+            #collapsibleSection {{
+                background-color: {colors["card_background"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                margin: {spacing["small"]};
+                padding: 0;
+            }}
+            
+            #sectionHeader {{
+                background-color: {colors["card_background"]};
+                padding: {spacing["medium"]};
+                border-radius: {borders["radius"]};
+            }}
+            
+            #sectionHeader:hover {{
+                background-color: {colors["button_hover"]};
+            }}
+            
+            #disclosureTriangle {{
+                background-color: transparent;
+                border: none;
+                color: {colors["accent"]};
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0;
+                margin: 0;
+            }}
+            
+            #disclosureTriangle:hover {{
+                color: {colors["accent_hover"]};
+            }}
+            
+            #sectionContent {{
+                padding: {spacing["medium"]};
+                padding-left: 25px;
+            }}
+            
+            /* Text inputs */
+            QLineEdit {{
+                background-color: {colors["input_background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                padding: {spacing["medium"]};
+                min-height: 25px;
+                selection-background-color: {colors["accent"]};
+            }}
+            
+            QLineEdit:focus {{
+                border-color: {colors["accent"]};
+            }}
+            
+            QLineEdit:hover {{
+                border-color: {colors["accent_hover"]};
+            }}
+            
+            /* Combo boxes (dropdowns) */
+            QComboBox {{
+                background-color: {colors["input_background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                padding: {spacing["medium"]};
+                min-height: 25px;
+                selection-background-color: {colors["accent"]};
+            }}
+            
+            QComboBox:hover {{
+                border-color: {colors["accent_hover"]};
+            }}
+            
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 15px;
+                border-left: 1px solid {colors["border"]};
+            }}
+            
+            QComboBox QAbstractItemView {{
+                background-color: {colors["card_background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                selection-background-color: {colors["accent"]};
+                selection-color: white;
+            }}
+            
+            /* Spin boxes (number inputs) */
+            QSpinBox, QDoubleSpinBox {{
+                background-color: {colors["input_background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                padding: {spacing["small"]};
+                min-height: 25px;
+            }}
+            
+            QSpinBox:hover, QDoubleSpinBox:hover {{
+                border-color: {colors["accent_hover"]};
+            }}
+            
+            QSpinBox::up-button, QDoubleSpinBox::up-button,
+            QSpinBox::down-button, QDoubleSpinBox::down-button {{
+                border: none;
+                background-color: {colors["button_background"]};
+                width: 16px;
+            }}
+            
+            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+                background-color: {colors["button_hover"]};
+            }}
+            
+            /* Labels */
+            QLabel {{
+                color: {colors["text_primary"]};
+                background-color: transparent;
+            }}
+            
+            QLabel[labelType="heading"] {{
+                font-size: {fonts["size_header"]};
+                font-weight: bold;
+                color: {colors["text_primary"]};
+                margin-bottom: {spacing["medium"]};
+            }}
+            
+            QLabel[labelType="caption"] {{
+                font-size: {fonts["size_small"]};
+                color: {colors["text_secondary"]};
+            }}
+            
+            /* Progress bar */
+            QProgressBar {{
+                background-color: {colors["input_background"]};
+                color: white;
+                border: none;
+                border-radius: {borders["radius"]};
+                text-align: center;
+                height: 12px;
+            }}
+            
+            QProgressBar::chunk {{
+                background-color: {colors["progress"]};
+                border-radius: {borders["radius"]};
+            }}
+            
+            /* Tabs */
+            QTabWidget::pane {{
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                top: -1px;
+                background-color: {colors["card_background"]};
+            }}
+            
+            QTabBar::tab {{
+                background-color: {colors["background"]};
+                color: {colors["text_primary"]};
+                border: {borders["width"]} solid {colors["border"]};
+                border-bottom: none;
+                border-top-left-radius: {borders["radius"]};
+                border-top-right-radius: {borders["radius"]};
+                padding: {spacing["medium"]} {spacing["large"]};
+                min-width: 80px;
+                margin-right: 2px;
+            }}
+            
+            QTabBar::tab:selected {{
+                background-color: {colors["card_background"]};
+                border-color: {colors["accent"]};
+                border-bottom: none;
+            }}
+            
+            QTabBar::tab:hover {{
+                background-color: {colors["button_hover"]};
+            }}
+            
+            /* Radio buttons */
+            QRadioButton {{
+                color: {colors["text_primary"]};
+                spacing: 5px;
+            }}
+            
+            QRadioButton::indicator {{
+                width: 13px;
+                height: 13px;
+                border-radius: 7px;
+                border: {borders["width"]} solid {colors["border"]};
+            }}
+            
+            QRadioButton::indicator:checked {{
+                background-color: {colors["accent"]};
+                border: 3px solid {colors["card_background"]};
+                outline: {borders["width"]} solid {colors["accent"]};
+            }}
+            
+            QRadioButton::indicator:hover {{
+                border-color: {colors["accent"]};
+            }}
+            
+            /* Scroll bars */
+            QScrollBar:vertical {{
+                background-color: {colors["background"]};
+                width: 14px;
+                margin: 0px;
+            }}
+            
+            QScrollBar::handle:vertical {{
+                background-color: {colors["button_background"]};
+                min-height: 20px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            
+            QScrollBar::handle:vertical:hover {{
+                background-color: {colors["button_hover"]};
+            }}
+            
+            QScrollBar:horizontal {{
+                background-color: {colors["background"]};
+                height: 14px;
+                margin: 0px;
+            }}
+            
+            QScrollBar::handle:horizontal {{
+                background-color: {colors["button_background"]};
+                min-width: 20px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {colors["button_hover"]};
+            }}
+            
+            QScrollBar::add-line, QScrollBar::sub-line {{
+                width: 0px;
+                height: 0px;
+            }}
+            
+            /* Splitter */
+            QSplitter::handle {{
+                background-color: {colors["border"]};
+            }}
+            
+            QSplitter::handle:horizontal {{
+                width: 2px;
+            }}
+            
+            QSplitter::handle:vertical {{
+                height: 2px;
+            }}
+            
+            QSplitter::handle:hover {{
+                background-color: {colors["accent"]};
+            }}
+            
+            /* Group box */
+            QGroupBox {{
+                border: {borders["width"]} solid {colors["border"]};
+                border-radius: {borders["radius"]};
+                margin-top: 1.5ex;
+                padding: {spacing["medium"]};
+                background-color: {colors["card_background"]};
+            }}
+            
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: {spacing["medium"]};
+                top: -1ex;
+                padding: 0 {spacing["small"]};
+                background-color: {colors["card_background"]};
+                color: {colors["text_primary"]};
+            }}
+        """
+        
+        # macOS specific styles
+        if platform.system() == "Darwin":
+            stylesheet += f"""
+                /* macOS specific styles */
+                QWidget {{
+                    font-family: "SF Pro Text", "Helvetica Neue", sans-serif;
+                }}
+                
+                QPushButton {{
+                    border-radius: 6px;
+                }}
+                
+                QPushButton#primaryButton {{
+                    background-color: {colors["accent"]};
+                    border: none;
+                }}
+            """
+        
+        # Windows specific styles
+        elif platform.system() == "Windows":
+            stylesheet += f"""
+                /* Windows specific styles */
+                QWidget {{
+                    font-family: "Segoe UI", sans-serif;
+                }}
+            """
+            
+        # Linux specific styles
+        else:
+            stylesheet += f"""
+                /* Linux specific styles */
+                QWidget {{
+                    font-family: "Ubuntu", "Noto Sans", sans-serif;
+                }}
+            """
+            
+        return stylesheet
+    
+    @classmethod
+    def apply_theme(cls, app, theme_name="dark"):
+        """Apply the specified theme to the entire application"""
+        stylesheet = cls.get_stylesheet(theme_name)
+        app.setStyleSheet(stylesheet)
+        
+        # Store the current theme name
+        app.setProperty("theme", theme_name)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
