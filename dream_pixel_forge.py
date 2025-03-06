@@ -769,13 +769,16 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(8)
         right_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
         
-        # Model selection section in collapsible group box
-        model_group = QGroupBox("Model Selection")
-        model_group.setCheckable(True)
-        model_group.setChecked(True)
-        model_layout = QVBoxLayout(model_group)
-        model_layout.setSpacing(5)  # Minimal spacing
-        model_layout.setContentsMargins(5, 5, 5, 5)  # Small margins
+        # Model selection section using CollapsibleSection
+        model_section = CollapsibleSection("Model Selection")
+        model_section.toggle_button.setChecked(True)  # Expanded by default
+        model_section.on_toggle(True)  # Show content
+        
+        # Create a container for model selection content
+        model_content = QWidget()
+        model_layout = QVBoxLayout(model_content)
+        model_layout.setSpacing(5)
+        model_layout.setContentsMargins(0, 0, 0, 0)
         
         # Create a tabbed interface for model selection
         self.model_tabs = QTabWidget()
@@ -852,16 +855,22 @@ class MainWindow(QMainWindow):
         model_layout.addWidget(self.model_tabs)
         model_layout.addWidget(self.model_info)
         
-        # Add model group to left panel
-        left_layout.addWidget(model_group)
+        # Add content to section
+        model_section.addWidget(model_content)
         
-        # Prompt section in collapsible group box
-        prompt_group = QGroupBox("Prompt Settings")
-        prompt_group.setCheckable(True)
-        prompt_group.setChecked(True)
-        prompt_layout = QVBoxLayout(prompt_group)
-        prompt_layout.setSpacing(5)  # Minimal spacing
-        prompt_layout.setContentsMargins(5, 5, 5, 5)  # Small margins
+        # Add section to left panel
+        left_layout.addWidget(model_section)
+        
+        # Prompt section using CollapsibleSection
+        prompt_section = CollapsibleSection("Prompt Settings")
+        prompt_section.toggle_button.setChecked(True)  # Expanded by default
+        prompt_section.on_toggle(True)  # Show content
+        
+        # Create a container for prompt content
+        prompt_content = QWidget()
+        prompt_layout = QVBoxLayout(prompt_content)
+        prompt_layout.setSpacing(5)
+        prompt_layout.setContentsMargins(0, 0, 0, 0)
         
         # Prompt input with label on top for compactness
         prompt_input_layout = QVBoxLayout()
@@ -883,17 +892,21 @@ class MainWindow(QMainWindow):
         prompt_layout.addLayout(prompt_input_layout)
         prompt_layout.addLayout(neg_prompt_input_layout)
         
-        # Add prompt group to left panel
-        left_layout.addWidget(prompt_group)
+        # Add content to section
+        prompt_section.addWidget(prompt_content)
         
-        # Ollama prompt enhancement section
+        # Add section to left panel
+        left_layout.addWidget(prompt_section)
+        
+        # Ollama prompt enhancement section using the custom collapsible section
         if self.ollama_available and self.ollama_models:
-            ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_group.setCheckable(True)
-            ollama_group.setChecked(False)  # Collapsed by default
-            ollama_layout = QVBoxLayout(ollama_group)
+            ollama_section = CollapsibleSection("Ollama Prompt Enhancement")
+            
+            # Create a container widget for Ollama controls
+            ollama_content = QWidget()
+            ollama_layout = QVBoxLayout(ollama_content)
             ollama_layout.setSpacing(5)
-            ollama_layout.setContentsMargins(5, 5, 5, 5)
+            ollama_layout.setContentsMargins(0, 0, 0, 0)
             
             # Model selection in a grid
             ollama_model_grid = QGridLayout()
@@ -942,17 +955,24 @@ class MainWindow(QMainWindow):
             enhance_grid.addWidget(self.enhance_input, 0, 0)
             enhance_grid.addWidget(self.enhance_button, 0, 1)
             
+            # Add layouts to container
             ollama_layout.addLayout(ollama_model_grid)
             ollama_layout.addLayout(input_mode_layout)
             ollama_layout.addLayout(enhance_grid)
             
-            left_layout.addWidget(ollama_group)
+            # Add container to section
+            ollama_section.addWidget(ollama_content)
+            
+            # Add section to left panel
+            left_layout.addWidget(ollama_section)
         else:
             # Show a message when Ollama is not available
-            ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_group.setCheckable(True)
-            ollama_group.setChecked(False)  # Collapsed by default
-            ollama_layout = QVBoxLayout(ollama_group)
+            ollama_section = CollapsibleSection("Ollama Prompt Enhancement")
+            
+            # Create message container
+            ollama_content = QWidget()
+            ollama_layout = QVBoxLayout(ollama_content)
+            ollama_layout.setContentsMargins(0, 0, 0, 0)
             
             if not self.ollama_available:
                 ollama_status = QLabel("Ollama is not running or not installed. Start Ollama to enable prompt enhancement.")
@@ -967,15 +987,22 @@ class MainWindow(QMainWindow):
             ollama_layout.addWidget(ollama_status)
             ollama_layout.addWidget(check_ollama_button)
             
-            left_layout.addWidget(ollama_group)
+            # Add container to section
+            ollama_section.addWidget(ollama_content)
+            
+            # Add section to left panel
+            left_layout.addWidget(ollama_section)
         
-        # Parameters section in a grid layout inside a collapsible group box
-        params_group = QGroupBox("Generation Parameters")
-        params_group.setCheckable(True)
-        params_group.setChecked(True)
-        params_layout = QGridLayout(params_group)
-        params_layout.setSpacing(5)  # Compact spacing
-        params_layout.setContentsMargins(5, 10, 5, 5)  # Small margins
+        # Parameters section using CollapsibleSection
+        params_section = CollapsibleSection("Generation Parameters")
+        params_section.toggle_button.setChecked(True)  # Expanded by default
+        params_section.on_toggle(True)  # Show content
+        
+        # Create container for parameters content
+        params_content = QWidget()
+        params_layout = QGridLayout(params_content)
+        params_layout.setSpacing(5)
+        params_layout.setContentsMargins(0, 0, 0, 0)
         
         # Batch size - Row 0
         batch_label = QLabel("Batch Size:")
@@ -1060,8 +1087,11 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(sampler_label, 3, 0)
         params_layout.addWidget(self.sampler_combo, 3, 1, 1, 3)  # Span 3 columns
         
-        # Add param group to left panel
-        left_layout.addWidget(params_group)
+        # Add content to section
+        params_section.addWidget(params_content)
+        
+        # Add param section to left panel
+        left_layout.addWidget(params_section)
         
         # Generate button
         self.generate_button = QPushButton("Generate Images")
@@ -3106,6 +3136,85 @@ class ErrorHandler:
 
 # Set up logging when module is imported
 ErrorHandler.setup_logging()
+
+class CollapsibleSection(QWidget):
+    """A custom collapsible section widget with disclosure triangle for macOS style"""
+    
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setObjectName("collapsibleSection")
+        
+        # Main layout
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        # Header layout with toggle button
+        self.header_widget = QWidget()
+        self.header_layout = QHBoxLayout(self.header_widget)
+        self.header_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Toggle button with arrow
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("disclosureTriangle")
+        self.toggle_button.setFixedSize(20, 20)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.clicked.connect(self.on_toggle)
+        self.toggle_button.setText("▶")  # Right-pointing triangle when collapsed
+        
+        # Title label
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet("font-weight: bold;")
+        
+        # Add to header layout
+        self.header_layout.addWidget(self.toggle_button)
+        self.header_layout.addWidget(self.title_label)
+        self.header_layout.addStretch()
+        
+        # Content widget
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(25, 5, 5, 5)  # Indent content
+        
+        # Add widgets to main layout
+        self.main_layout.addWidget(self.header_widget)
+        self.main_layout.addWidget(self.content_widget)
+        
+        # Set initial state (collapsed)
+        self.content_widget.setVisible(False)
+        
+        # Style for macOS
+        self.setStyleSheet("""
+            #collapsibleSection {
+                border: 1px solid #666;
+                border-radius: 3px;
+                background-color: #333;
+                margin: 2px;
+            }
+            #disclosureTriangle {
+                background-color: transparent;
+                border: none;
+                color: #ccc;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            #disclosureTriangle:hover {
+                color: white;
+            }
+        """)
+    
+    def on_toggle(self, checked):
+        """Toggle visibility of content"""
+        self.content_widget.setVisible(checked)
+        self.toggle_button.setText("▼" if checked else "▶")  # Down arrow when expanded, right arrow when collapsed
+    
+    def addWidget(self, widget):
+        """Add a widget to the content layout"""
+        self.content_layout.addWidget(widget)
+    
+    def addLayout(self, layout):
+        """Add a layout to the content layout"""
+        self.content_layout.addLayout(layout)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
