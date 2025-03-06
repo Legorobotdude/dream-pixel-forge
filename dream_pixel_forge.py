@@ -29,6 +29,8 @@ os.makedirs(LOCAL_MODELS_DIR, exist_ok=True)
 
 # Detect macOS for MPS (Metal) support
 IS_MACOS = platform.system() == 'Darwin'
+IS_WINDOWS = platform.system() == 'Windows'
+IS_LINUX = platform.system() == 'Linux'
 HAS_MPS = False
 if IS_MACOS:
     try:
@@ -401,17 +403,13 @@ class GenerationThread(QThread):
             # Clear CUDA cache if available
             if device == "cuda":
                 torch.cuda.empty_cache()
-                print("CUDA is available, using GPU")
                 print(f"VRAM available: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.2f} GB")
             elif device == "mps":
-                print("Using Apple Metal (MPS) for acceleration")
                 # No equivalent cache clearing for MPS
-            else:
-                print("Neither CUDA nor MPS is available, using CPU - generation will be slow")
+                pass
             
             # Check if model is already downloaded
             if not is_model_downloaded(model_id):
-                print(f"Model {model_id} not found in cache, will be downloaded")
                 self.progress.emit(0, f"First time using {model_id}. Downloading (~{size_gb:.1f}GB)...")
                 
                 # Start a thread to provide ongoing download status
@@ -792,7 +790,7 @@ class MainWindow(QMainWindow):
         hf_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
         
         # Use the right control based on platform
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             self.model_combo = MacDropdownButton(list(AVAILABLE_MODELS.keys()))
             self.model_combo.currentTextChanged.connect(self.on_model_changed)
             # Set initial selection to Stable Diffusion 1.5
@@ -845,7 +843,7 @@ class MainWindow(QMainWindow):
         local_controls_layout.setContentsMargins(0, 0, 0, 0)  # No margins
         
         # Use the right control based on platform
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             self.local_model_combo = MacDropdownButton()
             self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
         else:
@@ -911,12 +909,14 @@ class MainWindow(QMainWindow):
             ollama_model_label = QLabel("Ollama Model:")
             
             # Use the right control based on platform
-            if platform.system() == 'Darwin':  # macOS
+            if IS_MACOS:  # macOS
                 self.ollama_model_combo = MacDropdownButton(self.ollama_models)
+                self.ollama_model_combo.currentTextChanged.connect(self.refresh_ollama_models)
             else:
                 self.ollama_model_combo = QComboBox()
                 self.ollama_model_combo.addItems(self.ollama_models)
-                
+                self.ollama_model_combo.currentTextChanged.connect(self.refresh_ollama_models)
+            
             refresh_ollama_button = QPushButton("Refresh")
             refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
             ollama_model_layout.addWidget(ollama_model_label)
@@ -974,26 +974,31 @@ class MainWindow(QMainWindow):
         resolution_label = QLabel("Resolution:")
         
         # Create the appropriate control based on platform
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             self.resolution_combo = MacDropdownButton()
             default_model = list(AVAILABLE_MODELS.keys())[0]
-            default_resolutions = AVAILABLE_MODELS[default_model].get('resolutions', ['512x512 (Square)'])
+            default_resolutions = AVAILABLE_MODELS[default_model].get('resolution_presets', {}).keys()
             self.resolution_combo.addItems(default_resolutions)
             # Set the initial text to show the selected option
             if default_resolutions:
-                self.resolution_combo.setText(f"{default_resolutions[0]} ▼")
+                first_resolution = list(default_resolutions)[0]
+                self.resolution_combo.setText(f"{first_resolution} ▼")
         else:
             self.resolution_combo = QComboBox()
             default_model = list(AVAILABLE_MODELS.keys())[0]
-            default_resolutions = AVAILABLE_MODELS[default_model].get('resolutions', ['512x512 (Square)'])
+            default_resolutions = AVAILABLE_MODELS[default_model].get('resolution_presets', {}).keys()
             self.resolution_combo.addItems(default_resolutions)
+            
+        # Add widgets to resolution layout - CRITICAL FIX: was missing!
+        resolution_layout.addWidget(resolution_label)
+        resolution_layout.addWidget(self.resolution_combo)
         
         # Sampler selection
         sampler_layout = QHBoxLayout()
         sampler_label = QLabel("Sampler:")
         
         # Create the appropriate control based on platform
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             self.sampler_combo = MacDropdownButton(SAMPLERS.keys())
             # Set the initial text to show the selected option
             sampler_list = list(SAMPLERS.keys())
@@ -1108,7 +1113,7 @@ class MainWindow(QMainWindow):
         self.on_model_changed(default_model)
         
         # Platform-specific styling for macOS
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             # Create a comprehensive macOS style sheet
             mac_style = """
                 /* Global styles */
@@ -1236,7 +1241,15 @@ class MainWindow(QMainWindow):
         open_folder_action = QAction("Open Models Folder", self)
         open_folder_action.triggered.connect(self.open_models_folder)
         models_menu.addAction(open_folder_action)
-    
+        
+        # Presets menu
+        presets_menu = menu_bar.addMenu("Presets")
+        
+        # App Icon Generator action
+        app_icon_action = QAction("App Icon Generator", self)
+        app_icon_action.triggered.connect(self.apply_app_icon_preset)
+        presets_menu.addAction(app_icon_action)
+        
     def import_model(self):
         """Open dialog to import a model file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1299,7 +1312,7 @@ class MainWindow(QMainWindow):
         self.stop_generation_if_running()
         
         # Make sure the combo box display is updated properly (especially important on macOS)
-        if platform.system() == 'Darwin':
+        if IS_MACOS:
             index = self.model_combo.findText(model_name)
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
@@ -1370,6 +1383,7 @@ class MainWindow(QMainWindow):
         
     def generate_image(self):
         if not self.prompt_input.text():
+            self.status_label.setText("Please enter a prompt before generating images")
             return
             
         self.generate_button.setEnabled(False)
@@ -1475,27 +1489,33 @@ class MainWindow(QMainWindow):
             delattr(self, 'image_nav_layout')
             
         # Create and start the generation thread
-        self.generation_thread = GenerationThread(
-            model_config=model_config,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            num_inference_steps=self.steps_input.value(),
-            guidance_scale=self.guidance_input.value(),
-            width=width,
-            height=height,
-            seed=seed_value,
-            sampler=sampler_id,
-            batch_size=batch_size
-        )
-        
-        # Connect signals
-        self.generation_thread.progress.connect(self.handle_progress)
-        self.generation_thread.image_ready.connect(self.handle_image_ready)
-        self.generation_thread.error.connect(self.handle_error)
-        self.generation_thread.finished.connect(self.handle_generation_finished)
-        
-        # Start the thread
-        self.generation_thread.start()
+        try:
+            self.generation_thread = GenerationThread(
+                model_config=model_config,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=self.steps_input.value(),
+                guidance_scale=self.guidance_input.value(),
+                width=width,
+                height=height,
+                seed=seed_value,
+                sampler=sampler_id,
+                batch_size=batch_size
+            )
+            
+            # Connect signals
+            self.generation_thread.progress.connect(self.handle_progress)
+            self.generation_thread.image_ready.connect(self.handle_image_ready)
+            self.generation_thread.error.connect(self.handle_error)
+            self.generation_thread.finished.connect(self.handle_generation_finished)
+            
+            # Start the thread
+            self.generation_thread.start()
+        except Exception as e:
+            print(f"Error starting generation: {str(e)}")
+            self.status_label.setText("Error: Failed to start generation")
+            self.generate_button.setEnabled(True)
+            self.progress_bar.setVisible(False)
 
     def handle_progress(self, progress, message):
         """Handle progress updates from generation thread"""
@@ -1540,27 +1560,66 @@ class MainWindow(QMainWindow):
             
             # Initialize UI for image browsing if needed
             if total > 1 and not hasattr(self, 'image_nav_layout'):
-                # Create navigation buttons for browsing images
-                self.image_nav_layout = QHBoxLayout()
-                
-                self.prev_button = QPushButton("Previous")
-                self.prev_button.clicked.connect(self.show_previous_image)
-                self.prev_button.setEnabled(False)  # Disabled at first image
-                
-                self.image_counter_label = QLabel(f"Image {index+1}/{total}")
-                self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                
-                self.next_button = QPushButton("Next")
-                self.next_button.clicked.connect(self.show_next_image)
-                self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
-                
-                self.image_nav_layout.addWidget(self.prev_button)
-                self.image_nav_layout.addWidget(self.image_counter_label)
-                self.image_nav_layout.addWidget(self.next_button)
-                
-                # Find the layout that contains the image label
-                layout = self.centralWidget().layout()
-                layout.insertLayout(layout.count() - 1, self.image_nav_layout)  # Insert before the save button
+                try:
+                    # Create navigation buttons for browsing images
+                    self.image_nav_layout = QHBoxLayout()
+                    
+                    self.prev_button = QPushButton("Previous")
+                    self.prev_button.clicked.connect(self.show_previous_image)
+                    self.prev_button.setEnabled(False)  # Disabled at first image
+                    
+                    self.image_counter_label = QLabel(f"Image {index+1}/{total}")
+                    self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    
+                    self.next_button = QPushButton("Next")
+                    self.next_button.clicked.connect(self.show_next_image)
+                    self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
+                    
+                    self.image_nav_layout.addWidget(self.prev_button)
+                    self.image_nav_layout.addWidget(self.image_counter_label)
+                    self.image_nav_layout.addWidget(self.next_button)
+                    
+                    # Find the layout that contains the image label
+                    main_widget = self.centralWidget().widget()
+                    if main_widget and hasattr(main_widget, 'layout'):
+                        layout = main_widget.layout()
+                        # Make sure we have a valid layout to insert into
+                        if layout and layout.count() > 0:
+                            # Insert before the save button or at the end if save button not found
+                            insert_pos = max(0, layout.count() - 1)
+                            layout.insertLayout(insert_pos, self.image_nav_layout)
+                            print(f"Successfully added image navigation at position {insert_pos}")
+                        else:
+                            print("Warning: Main layout is empty, can't add image navigation")
+                    else:
+                        # Try alternate approach for finding and updating the layout
+                        print("Warning: Using alternate approach to find main layout")
+                        
+                        # Try to get the central widget directly
+                        scroll_area = self.centralWidget()
+                        if isinstance(scroll_area, QScrollArea) and scroll_area.widget():
+                            main_widget = scroll_area.widget()
+                            main_layout = main_widget.layout()
+                            
+                            if main_layout:
+                                # Find where to insert navigation - before save button
+                                insert_pos = 0
+                                for i in range(main_layout.count()):
+                                    item = main_layout.itemAt(i)
+                                    if item and item.widget():
+                                        if isinstance(item.widget(), QPushButton) and "Save" in item.widget().text():
+                                            insert_pos = i
+                                            break
+                                        
+                                # Insert navigation layout at the determined position
+                                main_layout.insertLayout(insert_pos, self.image_nav_layout)
+                                print(f"Successfully added image navigation using alternate method at position {insert_pos}")
+                            else:
+                                print("Warning: Could not find layout in main widget")
+                        else:
+                            print("Warning: Main widget or scroll area not found, can't add image navigation")
+                except Exception as e:
+                    print(f"Error adding image navigation: {str(e)}")
             elif hasattr(self, 'image_counter_label'):
                 # Update the counter if it already exists
                 try:
@@ -1613,15 +1672,16 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap.fromImage(qimage)
             
             # Scale pixmap to fit the label while maintaining aspect ratio
-            pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            if self.image_label.size().width() > 0 and self.image_label.size().height() > 0:
+                pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             
             # Display the image
             self.image_label.setPixmap(pixmap)
         except RuntimeError as e:
-            # Handle Qt object deleted errors
-            print(f"UI update error in display_image (normal if model was changed): {str(e)}")
+            # Handle Qt object deleted errors - silent handling is best here
+            pass
         except Exception as e:
-            # Log other unexpected errors
+            # Only log really unexpected errors
             print(f"Unexpected error in display_image: {str(e)}")
 
     def show_previous_image(self):
@@ -1683,7 +1743,7 @@ class MainWindow(QMainWindow):
             return
 
         # Make sure the combo box display is updated properly (especially important on macOS)
-        if platform.system() == 'Darwin':
+        if IS_MACOS:
             index = self.local_model_combo.findText(model_name)
             if index >= 0:
                 self.local_model_combo.setCurrentIndex(index)
@@ -1722,12 +1782,28 @@ class MainWindow(QMainWindow):
         current_selection = self.resolution_combo.currentText()
         
         self.resolution_combo.clear()
-        self.resolution_combo.addItems(resolution_presets.keys())
         
-        # Try to restore previous selection if it exists in the new list
-        index = self.resolution_combo.findText(current_selection)
-        if index >= 0:
-            self.resolution_combo.setCurrentIndex(index)
+        # Handle adding items based on platform
+        if IS_MACOS:
+            # Add items and update display for Mac dropdown
+            self.resolution_combo.addItems(resolution_presets.keys())
+            
+            # Try to restore previous selection if it exists in the new list
+            index = self.resolution_combo.findText(current_selection)
+            if index >= 0:
+                self.resolution_combo.setCurrentIndex(index)
+            elif len(resolution_presets) > 0:
+                # Set the first item if previous selection not found
+                first_resolution = list(resolution_presets.keys())[0]
+                self.resolution_combo.setText(f"{first_resolution} ▼")
+        else:
+            # Standard combo box for Windows/Linux
+            self.resolution_combo.addItems(resolution_presets.keys())
+            
+            # Try to restore previous selection if it exists in the new list
+            index = self.resolution_combo.findText(current_selection)
+            if index >= 0:
+                self.resolution_combo.setCurrentIndex(index)
 
     def open_manage_models(self):
         """Open the local models dialog"""
@@ -1776,7 +1852,7 @@ class MainWindow(QMainWindow):
             )
         
         # Update the model dropdown
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             self.ollama_model_combo.clear()
             self.ollama_model_combo.addItems(self.ollama_models)
         else:
@@ -1803,7 +1879,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Enhancing prompt with Ollama...")
         
         # Get the selected model and mode
-        if platform.system() == 'Darwin':  # macOS
+        if IS_MACOS:  # macOS
             model = self.ollama_model_combo.currentText()
         else:
             model = self.ollama_model_combo.currentText()
@@ -1835,16 +1911,105 @@ class MainWindow(QMainWindow):
     
     def handle_ollama_error(self, error_message):
         """Handle errors from Ollama"""
-        self.enhance_button.setEnabled(True)
-        self.status_label.setText("Error enhancing prompt")
+        self.status_label.setText(f"Ollama error: {error_message}")
         
-        # Show error in a dialog
-        QMessageBox.warning(
+        # Re-enable the enhance button if it was disabled
+        if hasattr(self, 'enhance_button'):
+            self.enhance_button.setEnabled(True)
+            
+        # Show error message if really needed
+        QMessageBox.warning(self, "Ollama Error", error_message)
+    
+    def apply_app_icon_preset(self):
+        """Apply a preset for generating app icons
+        
+        This preset applies optimal settings for app icon generation based on best practices
+        for creating clean, professional app icons with Stable Diffusion.
+        """
+        # Get the current model tab
+        current_tab = self.model_tabs.currentIndex()
+        model_name = ""
+        
+        # Check if we're using a model that supports SDXL-quality generations
+        is_sdxl_compatible = False
+        if current_tab == 0:  # Hugging Face tab
+            model_name = self.model_combo.currentText()
+            is_sdxl_compatible = "xl" in model_name.lower() or "sdxl" in model_name.lower()
+        else:  # Local models tab
+            model_name = self.local_model_combo.currentText()
+            if model_name and model_name in LOCAL_MODELS:
+                is_sdxl_compatible = "Stable Diffusion XL" in LOCAL_MODELS[model_name].model_type
+        
+        # Select the appropriate square resolution for icons
+        if is_sdxl_compatible:
+            square_resolution = "1024x1024 (Square)"
+        else:
+            square_resolution = "512x512 (Square)"
+            
+        # Find and set the resolution
+        index = self.resolution_combo.findText(square_resolution)
+        if index >= 0:
+            self.resolution_combo.setCurrentIndex(index)
+        
+        # Set optimal inference steps (20-30 is good for detailed icons)
+        self.steps_input.setValue(25)
+        
+        # Set optimal guidance scale (7.0-7.5 is good for icons - balances creativity and prompt adherence)
+        self.guidance_input.setValue(7.0)
+        
+        # Set batch size to 4 for options
+        self.batch_input.setValue(4)
+        
+        # Set to random seed for variety
+        self.seed_input.setText("-1")
+        
+        # Set optimal sampler for detailed images
+        sampler_index = self.sampler_combo.findText("DPM++ 2M")
+        if sampler_index < 0:
+            sampler_index = self.sampler_combo.findText("DDIM")  # Fallback
+        
+        if sampler_index >= 0:
+            self.sampler_combo.setCurrentIndex(sampler_index)
+            
+        # Create an app icon specific negative prompt
+        negative_prompt = "ugly, blurry, poor quality, distorted, deformed, poorly drawn, bad anatomy, " + \
+                         "text, words, letters, signature, watermark, logo, duplicated, extra details, " + \
+                         "cluttered, noisy, busy design, low contrast, pixelated"
+        
+        # Update the negative prompt
+        self.neg_prompt_input.setText(negative_prompt)
+            
+        # If there's no prompt yet, provide a placeholder for app icon generation
+        if not self.prompt_input.text():
+            self.prompt_input.setText("clean professional app icon, [describe app purpose here], flat design, app icon, ios app icon")
+            # Select the text for easy editing
+            self.prompt_input.selectAll()
+            self.prompt_input.setFocus()
+        else:
+            # If there is text, append app icon specific terms if not already present
+            current_prompt = self.prompt_input.text()
+            if "app icon" not in current_prompt.lower():
+                enhanced_prompt = f"{current_prompt}, app icon, ios app icon"
+                self.prompt_input.setText(enhanced_prompt)
+                
+        # Show a message to explain the preset
+        QMessageBox.information(
             self,
-            "Ollama Error",
-            f"An error occurred while enhancing the prompt:\n{error_message}"
+            "App Icon Preset Applied",
+            "App icon generation preset has been applied with the following optimizations:\n\n"
+            f"• Resolution: {square_resolution}\n"
+            f"• Steps: 25\n"
+            f"• Guidance Scale: 7.0\n"
+            f"• Batch Size: 4 (to provide options)\n"
+            f"• Sampler: Optimized for detail\n"
+            f"• Negative prompt: Optimized for clean icons\n\n"
+            "For best results:\n"
+            "• Describe your app purpose clearly in the prompt\n"
+            "• Use terms like 'minimal', 'clean', 'flat design', or 'professional'\n"
+            "• Generate multiple versions and pick the best one\n"
+            "• For specific platforms add 'ios app icon' or 'android app icon'"
         )
-
+    
     def save_image(self):
         """Save the generated image(s)"""
         if not self.current_images:
