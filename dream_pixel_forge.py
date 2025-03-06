@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QTabWidget, QListWidget, QListWidgetItem, QDialog,
                             QFormLayout, QFrame, QStyle, QStyleOptionComboBox,
                             QMenu, QCheckBox, QSizePolicy, QGridLayout,
-                            QScrollArea, QTextEdit)
+                            QScrollArea, QTextEdit, QSplitter)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, DPMSolverSDEScheduler, KarrasVeScheduler
@@ -724,7 +724,7 @@ class MainWindow(QMainWindow):
         
         # App setup
         self.setWindowTitle("DreamPixelForge - Text to Image")
-        self.setGeometry(100, 100, 1200, 900)  # Increased default size
+        self.setGeometry(100, 100, 1000, 800)  # Slightly smaller default size
         
         # Create menu bar
         self.create_menu()
@@ -736,7 +736,10 @@ class MainWindow(QMainWindow):
         
         # Create the main content widget
         main_widget = QWidget()
+        # Use QVBoxLayout for the main layout
         main_layout = QVBoxLayout(main_widget)
+        main_layout.setSpacing(8)  # Reduced spacing for compactness
+        main_layout.setContentsMargins(10, 10, 10, 10)  # Smaller margins
         
         # Set the main widget as the scroll area's widget
         scroll_area.setWidget(main_widget)
@@ -749,68 +752,42 @@ class MainWindow(QMainWindow):
             self.ollama_models = self.ollama_client.list_models()
         self.ollama_thread = None
         
-        # Create input section
-        input_layout = QVBoxLayout()
+        # Create a split view - inputs on left, image on right for larger screens
+        # Automatically switches to vertical on narrow screens
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
         
-        # Model selection
-        model_layout = QHBoxLayout()
-        model_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        # Left panel - inputs and controls
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
+        
+        # Right panel - image display
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
+        
+        # Model selection section in collapsible group box
+        model_group = QGroupBox("Model Selection")
+        model_group.setCheckable(True)
+        model_group.setChecked(True)
+        model_layout = QVBoxLayout(model_group)
+        model_layout.setSpacing(5)  # Minimal spacing
+        model_layout.setContentsMargins(5, 5, 5, 5)  # Small margins
         
         # Create a tabbed interface for model selection
         self.model_tabs = QTabWidget()
         # Make it very compact
-        self.model_tabs.setMinimumHeight(80)
-        self.model_tabs.setMaximumHeight(120)
-        
-        # Improve tab appearance with more compact styling
-        self.model_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #666;
-                background-color: #333;
-                border-radius: 4px;
-            }
-            QTabBar::tab {
-                background-color: #444;
-                color: white;
-                border: 1px solid #666;
-                border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                padding: 4px 8px;
-                min-width: 100px;
-            }
-            QTabBar::tab:selected {
-                background-color: #555;
-                border-bottom: none;
-            }
-            QTabBar::tab:hover {
-                background-color: #666;
-            }
-        """)
+        self.model_tabs.setMinimumHeight(70)
+        self.model_tabs.setMaximumHeight(100)
         
         # Hugging Face models tab
         hf_tab = QWidget()
-        hf_layout = QVBoxLayout(hf_tab)
+        hf_layout = QHBoxLayout(hf_tab)  # Changed to horizontal for compactness
         hf_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
-        hf_layout.setSpacing(1)  # Minimal spacing
-        
-        # Create a more compact layout for the dropdown - using horizontal layout
-        model_container = QFrame()
-        model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        model_container.setStyleSheet("""
-            QFrame {
-                background-color: #444;
-                border: 1px solid #666;
-                border-radius: 4px;
-                padding: 3px;
-                margin: 1px;
-            }
-        """)
-        
-        # Create a horizontal layout for the label and dropdown
-        model_container_layout = QHBoxLayout(model_container)
-        model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
-        model_container_layout.setSpacing(5)  # Small spacing between label and dropdown
+        hf_layout.setSpacing(5)  # Minimal spacing
         
         hf_model_label = QLabel("Select HuggingFace Model:")
         hf_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
@@ -829,45 +806,18 @@ class MainWindow(QMainWindow):
             # Set initial selection
             self.model_combo.setCurrentText("Stable Diffusion 1.5")
         
-        model_container_layout.addWidget(hf_model_label)
-        model_container_layout.addWidget(self.model_combo)
-        
-        # Add to tab layout with proper spacing
-        hf_layout.addWidget(model_container)
-        self.model_tabs.addTab(hf_tab, "Hugging Face Models")
+        hf_layout.addWidget(hf_model_label)
+        hf_layout.addWidget(self.model_combo)
         
         # Local models tab
         local_tab = QWidget()
-        local_layout = QVBoxLayout(local_tab)
+        local_layout = QHBoxLayout(local_tab)  # Changed to horizontal for compactness
         local_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
-        local_layout.setSpacing(1)  # Minimal spacing
-        
-        # Create a more compact layout for the dropdown - using horizontal layout
-        local_model_container = QFrame()
-        local_model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        local_model_container.setStyleSheet("""
-            QFrame {
-                background-color: #444;
-                border: 1px solid #666;
-                border-radius: 4px;
-                padding: 3px;
-                margin: 1px;
-            }
-        """)
-        
-        # Create a horizontal layout for the model section
-        local_model_container_layout = QHBoxLayout(local_model_container)
-        local_model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
-        local_model_container_layout.setSpacing(5)  # Small spacing
+        local_layout.setSpacing(5)  # Minimal spacing
         
         local_model_label = QLabel("Select Local Model:")
         local_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
         local_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
-        
-        # Create a layout for the dropdown and manage button
-        local_controls_layout = QHBoxLayout()
-        local_controls_layout.setSpacing(5)  # Small spacing
-        local_controls_layout.setContentsMargins(0, 0, 0, 0)  # No margins
         
         # Use the right control based on platform
         if IS_MACOS:  # macOS
@@ -877,23 +827,17 @@ class MainWindow(QMainWindow):
             self.local_model_combo = QComboBox()
             self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
             
-        manage_models_btn = QPushButton("Manage Models")
-        manage_models_btn.setMaximumHeight(25)  # Limit height
+        manage_models_btn = QPushButton("Manage")
+        manage_models_btn.setMaximumWidth(70)  # Limit width
         manage_models_btn.setStyleSheet("font-size: 11px; padding: 2px 5px;")
         manage_models_btn.clicked.connect(self.open_manage_models)
         
-        # Add label directly to the container layout
-        local_model_container_layout.addWidget(local_model_label)
+        local_layout.addWidget(local_model_label)
+        local_layout.addWidget(self.local_model_combo, 1)  # Give dropdown stretch
+        local_layout.addWidget(manage_models_btn)
         
-        # Add combo and button to the controls layout
-        local_controls_layout.addWidget(self.local_model_combo, 3)  # Give dropdown more space
-        local_controls_layout.addWidget(manage_models_btn, 1)
-        
-        # Add the controls layout to the container layout
-        local_model_container_layout.addLayout(local_controls_layout, 1)
-        
-        # Add to tab layout with proper spacing
-        local_layout.addWidget(local_model_container)
+        # Add tabs
+        self.model_tabs.addTab(hf_tab, "Hugging Face Models")
         self.model_tabs.addTab(local_tab, "Local Models")
         
         # Connect tab change to update model info
@@ -906,34 +850,57 @@ class MainWindow(QMainWindow):
         self.model_info.setMaximumHeight(40)  # Limit height of model info
         
         model_layout.addWidget(self.model_tabs)
-        input_layout.addLayout(model_layout)
-        input_layout.addWidget(self.model_info)
+        model_layout.addWidget(self.model_info)
         
-        # Prompt input
-        prompt_layout = QHBoxLayout()
+        # Add model group to left panel
+        left_layout.addWidget(model_group)
+        
+        # Prompt section in collapsible group box
+        prompt_group = QGroupBox("Prompt Settings")
+        prompt_group.setCheckable(True)
+        prompt_group.setChecked(True)
+        prompt_layout = QVBoxLayout(prompt_group)
+        prompt_layout.setSpacing(5)  # Minimal spacing
+        prompt_layout.setContentsMargins(5, 5, 5, 5)  # Small margins
+        
+        # Prompt input with label on top for compactness
+        prompt_input_layout = QVBoxLayout()
         prompt_label = QLabel("Prompt:")
+        prompt_label.setStyleSheet("font-weight: bold;")
         self.prompt_input = QLineEdit()
-        prompt_layout.addWidget(prompt_label)
-        prompt_layout.addWidget(self.prompt_input)
-        input_layout.addLayout(prompt_layout)
+        prompt_input_layout.addWidget(prompt_label)
+        prompt_input_layout.addWidget(self.prompt_input)
         
-        # Negative prompt input
-        neg_prompt_layout = QHBoxLayout()
+        # Negative prompt input with label on top for compactness
+        neg_prompt_input_layout = QVBoxLayout()
         neg_prompt_label = QLabel("Negative Prompt:")
+        neg_prompt_label.setStyleSheet("font-weight: bold;")
         self.neg_prompt_input = QLineEdit()
         self.neg_prompt_input.setText(DEFAULT_NEGATIVE_PROMPTS["sd15"])
-        neg_prompt_layout.addWidget(neg_prompt_label)
-        neg_prompt_layout.addWidget(self.neg_prompt_input)
-        input_layout.addLayout(neg_prompt_layout)
+        neg_prompt_input_layout.addWidget(neg_prompt_label)
+        neg_prompt_input_layout.addWidget(self.neg_prompt_input)
+        
+        prompt_layout.addLayout(prompt_input_layout)
+        prompt_layout.addLayout(neg_prompt_input_layout)
+        
+        # Add prompt group to left panel
+        left_layout.addWidget(prompt_group)
         
         # Ollama prompt enhancement section
         if self.ollama_available and self.ollama_models:
             ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_layout = QVBoxLayout()
+            ollama_group.setCheckable(True)
+            ollama_group.setChecked(False)  # Collapsed by default
+            ollama_layout = QVBoxLayout(ollama_group)
+            ollama_layout.setSpacing(5)
+            ollama_layout.setContentsMargins(5, 5, 5, 5)
             
-            # Model selection
-            ollama_model_layout = QHBoxLayout()
+            # Model selection in a grid
+            ollama_model_grid = QGridLayout()
+            ollama_model_grid.setSpacing(5)
+            
             ollama_model_label = QLabel("Ollama Model:")
+            ollama_model_label.setStyleSheet("font-weight: bold; font-size: 11px;")
             
             # Use the right control based on platform
             if IS_MACOS:  # macOS
@@ -945,37 +912,47 @@ class MainWindow(QMainWindow):
                 self.ollama_model_combo.currentTextChanged.connect(self.refresh_ollama_models)
             
             refresh_ollama_button = QPushButton("Refresh")
-            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
-            ollama_model_layout.addWidget(ollama_model_label)
-            ollama_model_layout.addWidget(self.ollama_model_combo)
-            ollama_model_layout.addWidget(refresh_ollama_button)
-            ollama_layout.addLayout(ollama_model_layout)
+            refresh_ollama_button.setMaximumWidth(70)
             
-            # Input mode selection
+            refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
+            
+            ollama_model_grid.addWidget(ollama_model_label, 0, 0)
+            ollama_model_grid.addWidget(self.ollama_model_combo, 0, 1)
+            ollama_model_grid.addWidget(refresh_ollama_button, 0, 2)
+            
+            # Input mode selection row
             input_mode_layout = QHBoxLayout()
             self.description_radio = QRadioButton("Description to Tags")
             self.tags_radio = QRadioButton("Enhance Tags")
             self.tags_radio.setChecked(True)  # Default to tag enhancement
             input_mode_layout.addWidget(self.description_radio)
             input_mode_layout.addWidget(self.tags_radio)
-            ollama_layout.addLayout(input_mode_layout)
             
-            # Enhance button and input for enhancement
-            enhance_layout = QHBoxLayout()
+            # Enhance button and input row
+            enhance_grid = QGridLayout()
+            enhance_grid.setSpacing(5)
+            
             self.enhance_input = QLineEdit()
             self.enhance_input.setPlaceholderText("Enter prompt to enhance")
-            self.enhance_button = QPushButton("Enhance Prompt")
-            self.enhance_button.clicked.connect(self.enhance_prompt)
-            enhance_layout.addWidget(self.enhance_input)
-            enhance_layout.addWidget(self.enhance_button)
-            ollama_layout.addLayout(enhance_layout)
             
-            ollama_group.setLayout(ollama_layout)
-            input_layout.addWidget(ollama_group)
+            self.enhance_button = QPushButton("Enhance")
+            self.enhance_button.setMaximumWidth(70)
+            self.enhance_button.clicked.connect(self.enhance_prompt)
+            
+            enhance_grid.addWidget(self.enhance_input, 0, 0)
+            enhance_grid.addWidget(self.enhance_button, 0, 1)
+            
+            ollama_layout.addLayout(ollama_model_grid)
+            ollama_layout.addLayout(input_mode_layout)
+            ollama_layout.addLayout(enhance_grid)
+            
+            left_layout.addWidget(ollama_group)
         else:
             # Show a message when Ollama is not available
             ollama_group = QGroupBox("Ollama Prompt Enhancement")
-            ollama_layout = QVBoxLayout()
+            ollama_group.setCheckable(True)
+            ollama_group.setChecked(False)  # Collapsed by default
+            ollama_layout = QVBoxLayout(ollama_group)
             
             if not self.ollama_available:
                 ollama_status = QLabel("Ollama is not running or not installed. Start Ollama to enable prompt enhancement.")
@@ -990,15 +967,29 @@ class MainWindow(QMainWindow):
             ollama_layout.addWidget(ollama_status)
             ollama_layout.addWidget(check_ollama_button)
             
-            ollama_group.setLayout(ollama_layout)
-            input_layout.addWidget(ollama_group)
+            left_layout.addWidget(ollama_group)
         
-        # Parameters section
-        params_layout = QHBoxLayout()
+        # Parameters section in a grid layout inside a collapsible group box
+        params_group = QGroupBox("Generation Parameters")
+        params_group.setCheckable(True)
+        params_group.setChecked(True)
+        params_layout = QGridLayout(params_group)
+        params_layout.setSpacing(5)  # Compact spacing
+        params_layout.setContentsMargins(5, 10, 5, 5)  # Small margins
         
-        # Resolution selection
-        resolution_layout = QHBoxLayout()
+        # Batch size - Row 0
+        batch_label = QLabel("Batch Size:")
+        batch_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        self.batch_input = QSpinBox()
+        self.batch_input.setRange(1, 10)  # Allow generating up to 10 images at once
+        self.batch_input.setValue(1)  # Default to single image
+        self.batch_input.setToolTip("Number of images to generate in one batch")
+        params_layout.addWidget(batch_label, 0, 0)
+        params_layout.addWidget(self.batch_input, 0, 1)
+        
+        # Resolution selection - Row 0 (continued)
         resolution_label = QLabel("Resolution:")
+        resolution_label.setStyleSheet("font-weight: bold; font-size: 11px;")
         
         # Create the appropriate control based on platform
         if IS_MACOS:  # macOS
@@ -1015,14 +1006,45 @@ class MainWindow(QMainWindow):
             default_model = list(AVAILABLE_MODELS.keys())[0]
             default_resolutions = AVAILABLE_MODELS[default_model].get('resolution_presets', {}).keys()
             self.resolution_combo.addItems(default_resolutions)
-            
-        # Add widgets to resolution layout - CRITICAL FIX: was missing!
-        resolution_layout.addWidget(resolution_label)
-        resolution_layout.addWidget(self.resolution_combo)
         
-        # Sampler selection
-        sampler_layout = QHBoxLayout()
+        params_layout.addWidget(resolution_label, 0, 2)
+        params_layout.addWidget(self.resolution_combo, 0, 3)
+        
+        # Number of steps - Row 1
+        steps_label = QLabel("Steps:")
+        steps_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        self.steps_input = QSpinBox()
+        self.steps_input.setRange(1, 150)
+        self.steps_input.setValue(30)
+        params_layout.addWidget(steps_label, 1, 0)
+        params_layout.addWidget(self.steps_input, 1, 1)
+        
+        # Guidance scale - Row 1 (continued)
+        guidance_label = QLabel("Guidance Scale:")
+        guidance_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        self.guidance_input = QDoubleSpinBox()
+        self.guidance_input.setRange(1.0, 20.0)
+        self.guidance_input.setValue(7.5)
+        self.guidance_input.setSingleStep(0.5)
+        params_layout.addWidget(guidance_label, 1, 2)
+        params_layout.addWidget(self.guidance_input, 1, 3)
+        
+        # Seed - Row 2
+        seed_label = QLabel("Seed:")
+        seed_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        self.seed_input = QLineEdit("-1")
+        self.seed_input.setPlaceholderText("Enter seed or -1 for random")
+        random_seed_button = QPushButton("Random")
+        random_seed_button.setMaximumWidth(70)
+        random_seed_button.clicked.connect(self.generate_random_seed)
+        
+        params_layout.addWidget(seed_label, 2, 0)
+        params_layout.addWidget(self.seed_input, 2, 1)
+        params_layout.addWidget(random_seed_button, 2, 2)
+        
+        # Sampler selection - Row 3
         sampler_label = QLabel("Sampler:")
+        sampler_label.setStyleSheet("font-weight: bold; font-size: 11px;")
         
         # Create the appropriate control based on platform
         if IS_MACOS:  # macOS
@@ -1034,88 +1056,65 @@ class MainWindow(QMainWindow):
         else:
             self.sampler_combo = QComboBox()
             self.sampler_combo.addItems(SAMPLERS.keys())
-            
-        sampler_layout.addWidget(sampler_label)
-        sampler_layout.addWidget(self.sampler_combo)
         
-        # Number of steps
-        steps_layout = QHBoxLayout()
-        steps_label = QLabel("Number of Steps:")
-        self.steps_input = QSpinBox()
-        self.steps_input.setRange(1, 150)
-        self.steps_input.setValue(30)
-        steps_layout.addWidget(steps_label)
-        steps_layout.addWidget(self.steps_input)
+        params_layout.addWidget(sampler_label, 3, 0)
+        params_layout.addWidget(self.sampler_combo, 3, 1, 1, 3)  # Span 3 columns
         
-        # Guidance scale
-        guidance_layout = QHBoxLayout()
-        guidance_label = QLabel("Guidance Scale:")
-        self.guidance_input = QDoubleSpinBox()
-        self.guidance_input.setRange(1.0, 20.0)
-        self.guidance_input.setValue(7.5)
-        self.guidance_input.setSingleStep(0.5)
-        guidance_layout.addWidget(guidance_label)
-        guidance_layout.addWidget(self.guidance_input)
-        
-        # Seed
-        seed_layout = QHBoxLayout()
-        seed_label = QLabel("Seed:")
-        self.seed_input = QLineEdit("-1")
-        self.seed_input.setPlaceholderText("Enter seed or -1 for random")
-        random_seed_button = QPushButton("Random")
-        random_seed_button.clicked.connect(self.generate_random_seed)
-        seed_layout.addWidget(seed_label)
-        seed_layout.addWidget(self.seed_input)
-        seed_layout.addWidget(random_seed_button)
-        
-        # Batch size
-        batch_layout = QHBoxLayout()
-        batch_label = QLabel("Batch Size:")
-        self.batch_input = QSpinBox()
-        self.batch_input.setRange(1, 10)  # Allow generating up to 10 images at once
-        self.batch_input.setValue(1)  # Default to single image
-        self.batch_input.setToolTip("Number of images to generate in one batch")
-        batch_layout.addWidget(batch_label)
-        batch_layout.addWidget(self.batch_input)
-        params_layout.addLayout(batch_layout)
-        
-        params_layout.addLayout(resolution_layout)
-        params_layout.addLayout(steps_layout)
-        params_layout.addLayout(guidance_layout)
-        params_layout.addLayout(seed_layout)
-        params_layout.addLayout(sampler_layout)
-        
-        input_layout.addLayout(params_layout)
-        main_layout.addLayout(input_layout)
+        # Add param group to left panel
+        left_layout.addWidget(params_group)
         
         # Generate button
         self.generate_button = QPushButton("Generate Images")
+        self.generate_button.setMinimumHeight(36)  # Slightly taller for emphasis
         self.generate_button.clicked.connect(self.generate_image)
-        main_layout.addWidget(self.generate_button)
+        left_layout.addWidget(self.generate_button)
         
-        # Status label
+        # Status and progress
+        status_layout = QHBoxLayout()
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.status_label)
-        
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
-        main_layout.addWidget(self.progress_bar)
         
-        # Image display
+        status_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.progress_bar)
+        left_layout.addLayout(status_layout)
+        
+        # Add stretch to push everything up
+        left_layout.addStretch(1)
+        
+        # Right panel - image display
+        # Image display with proper sizing
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumSize(512, 512)
-        self.image_label.setStyleSheet("border: 1px solid #ccc;")
-        main_layout.addWidget(self.image_label)
+        self.image_label.setMinimumSize(384, 384)  # Smaller minimum size
+        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.image_label.setStyleSheet("border: 1px solid #666; background-color: #2a2a2a;")
         
-        # Create save button
+        # Navigation controls (will be added when needed)
+        self.nav_placeholder = QWidget()
+        self.nav_layout = QHBoxLayout(self.nav_placeholder)
+        self.nav_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Save button
         self.save_button = QPushButton("Save Image to Custom Location")
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
-        main_layout.addWidget(self.save_button)
+        
+        right_layout.addWidget(self.image_label, 1)  # Give it stretch factor
+        right_layout.addWidget(self.nav_placeholder)
+        right_layout.addWidget(self.save_button)
+        
+        # Add panels to splitter
+        self.main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(right_panel)
+        
+        # Set initial sizes - 40% for controls, 60% for image
+        self.main_splitter.setSizes([400, 600])
+        
+        # Add splitter to main layout
+        main_layout.addWidget(self.main_splitter)
         
         self.current_images = []
         self.generation_thread = None
@@ -1150,36 +1149,57 @@ class MainWindow(QMainWindow):
                 
                 /* Line edit styling */
                 QLineEdit {
-                    padding: 5px;
-                    min-height: 25px;
-                    border: 1px solid #888;
-                    border-radius: 4px;
+                    padding: 4px;
+                    min-height: 22px;
+                    border: 1px solid #777;
+                    border-radius: 3px;
                     background-color: #333;
                 }
                 
                 /* Button styling */
                 QPushButton {
-                    padding: 5px 10px;
-                    min-height: 25px;
-                    border: 1px solid #888;
-                    border-radius: 4px;
+                    padding: 4px 8px;
+                    min-height: 22px;
+                    border: 1px solid #777;
+                    border-radius: 3px;
                     background-color: #444;
                 }
                 QPushButton:hover {
                     background-color: #555;
                 }
                 
+                /* Group box styling */
+                QGroupBox {
+                    border: 1px solid #666;
+                    border-radius: 3px;
+                    margin-top: 0.5em;
+                    padding: 2px;
+                    background-color: #333;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 7px;
+                    top: -2px;
+                    padding: 0 3px;
+                    background-color: #333;
+                }
+                QGroupBox::indicator {
+                    width: 13px;
+                    height: 13px;
+                }
+                
                 /* Tab widget styling */
                 QTabWidget::pane {
-                    border: 1px solid #888;
-                    border-radius: 4px;
+                    border: 1px solid #777;
+                    border-radius: 3px;
                     top: -1px;
-                    padding: 5px;
+                    padding: 2px;
                 }
                 QTabBar::tab {
-                    font-size: 13px;
-                    padding: 6px 12px;
-                    min-width: 120px;
+                    font-size: 12px;
+                    padding: 4px 8px;
+                    min-width: 100px;
                     background-color: #333;
                     border: 1px solid #555;
                     border-bottom: none;
@@ -1187,27 +1207,54 @@ class MainWindow(QMainWindow):
                 }
                 QTabBar::tab:selected {
                     background-color: #444;
-                    border: 1px solid #888;
+                    border: 1px solid #777;
                     border-bottom: none;
                 }
                 
                 /* Spin box styling */
                 QSpinBox, QDoubleSpinBox {
-                    padding: 4px;
-                    min-height: 25px;
-                    border: 1px solid #888;
-                    border-radius: 4px;
+                    padding: 2px;
+                    min-height: 22px;
+                    border: 1px solid #777;
+                    border-radius: 3px;
                     background-color: #333;
+                }
+                
+                /* Progress bar styling */
+                QProgressBar {
+                    border: 1px solid #666;
+                    border-radius: 3px;
+                    background-color: #333;
+                    text-align: center;
+                }
+                QProgressBar::chunk {
+                    background-color: #5a8cbe;
+                    width: 10px;
+                }
+                
+                /* Splitter styling */
+                QSplitter::handle {
+                    background-color: #555;
+                }
+                QSplitter::handle:horizontal {
+                    width: 4px;
+                }
+                QSplitter::handle:vertical {
+                    height: 4px;
+                }
+                
+                /* ScrollArea styling */
+                QScrollArea {
+                    border: none;
+                    background-color: transparent;
                 }
             """
             
             # Apply specific styles to critical elements
             self.setStyleSheet(mac_style)
             
-            # Add more spacing for macOS layout
-            for layout in [model_layout, prompt_layout, neg_prompt_layout, params_layout]:
-                layout.setSpacing(8)
-                layout.setContentsMargins(4, 4, 4, 4)
+            # No need for the old layout adjustments as we're using a new layout system
+            # The spacing is already set in the layout initialization
 
     def initialize_counter(self):
         """Find the highest counter value from existing files in the outputs directory"""
@@ -1560,73 +1607,106 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Generation complete! All images auto-saved to outputs folder.")
         
     def handle_image_ready(self, image, index, total):
-        """Handle each image as it completes generation with improved error handling"""
+        """Handle individual image ready signal from generation thread"""
         def _ui_update_operation():
             # Store the image in the current_images list
-            if not hasattr(self, 'current_images') or self.current_images is None or len(self.current_images) != total:
-                self.current_images = [None] * total
-
-            # Add the image to the list at the correct index
+            # Make sure the list is large enough
+            while len(self.current_images) < total:
+                self.current_images.append(None)
+                
+            # Update the image at this index
             self.current_images[index] = image
             
-            # Update status label with progress
-            seed = self.generation_thread.generated_seeds[index]
-            self.status_label.setText(f"Generated image {index+1}/{total} (seed: {seed})")
-            
-            # Auto-save image to outputs folder
-            self.auto_save_image(image, index, seed)
-            
-            # Initialize UI for image browsing if needed
-            self._setup_image_navigation(index, total)
-            
-            # Set the current image index
-            self.current_image_index = index
-            
+            # Log the image generation
+            # Get the seed from the generation thread
+            seed = self.generation_thread.generated_seeds[index] if hasattr(self.generation_thread, 'generated_seeds') and len(self.generation_thread.generated_seeds) > index else -1
+            image_path = self.auto_save_image(image, index, seed)
+            if image_path:
+                ErrorHandler.log_info(f"Automatically saved image {index+1}/{total} to {image_path}")
+                
             # Display the image
             self.display_image(index)
             
-            # Enable the save button after the first image
-            self.save_button.setEnabled(True)
+            # Update status
+            self.status_label.setText(f"Generated image {index+1}/{total}")
             
-            # Update save button text based on total images
+            # Only show image navigation for multiple images
             if total > 1:
-                self.save_button.setText("Save Images to Custom Location")
-            else:
-                self.save_button.setText("Save Image to Custom Location")
+                self._setup_image_navigation(index, total)
         
-        try:
-            # Use safe UI operation wrapper for most operations
-            ErrorHandler.safe_ui_operation(self, _ui_update_operation, "Image UI Update Error")
-        except Exception as e:
-            # Last resort error handler
-            ErrorHandler.log_error(f"Critical error in handle_image_ready: {str(e)}", exc_info=e)
+        # Use safe UI operation with error handling
+        ErrorHandler.safe_ui_operation(self, _ui_update_operation, "Image Ready Error")
 
     def display_image(self, index):
-        """Display the image at the specified index with improved error handling"""
+        """Display an image at the specified index with proper error handling"""
+        if not self.current_images or index < 0 or index >= len(self.current_images):
+            return
+            
         def _display_operation():
-            if not self.current_images or index >= len(self.current_images) or self.current_images[index] is None:
-                return
+            try:
+                # Get the image and convert to QPixmap
+                pil_image = self.current_images[index]
                 
-            # Check if image_label exists
-            if not hasattr(self, 'image_label'):
-                return
+                # Convert PIL image to QPixmap
+                qim = QImage(pil_image.tobytes(), pil_image.width, pil_image.height, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qim)
                 
-            # Convert PIL image to QPixmap
-            image = self.current_images[index]
-            img_data = image.convert("RGB").tobytes("raw", "RGB")
-            qimage = QImage(img_data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimage)
-            
-            # Scale pixmap to fit the label while maintaining aspect ratio
-            if self.image_label.size().width() > 0 and self.image_label.size().height() > 0:
-                pixmap = pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, 
-                                      Qt.TransformationMode.SmoothTransformation)
-            
-            # Display the image
-            self.image_label.setPixmap(pixmap)
+                # Calculate the appropriate size to display the image while maintaining aspect ratio
+                label_size = self.image_label.size()
+                scaled_pixmap = pixmap.scaled(
+                    label_size.width(), 
+                    label_size.height(),
+                    Qt.AspectRatioMode.KeepAspectRatio, 
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                
+                # Set the pixmap to the label
+                self.image_label.setPixmap(scaled_pixmap)
+                
+                # Enable save button since we have an image
+                self.save_button.setEnabled(True)
+                
+                # Setup image navigation if we have multiple images
+                self._setup_image_navigation(index, len(self.current_images))
+                
+                # Update window title with current image info
+                image_info = f"Image {index+1}/{len(self.current_images)}"
+                self.setWindowTitle(f"DreamPixelForge - Text to Image - {image_info}")
+                
+                # When the image label is resized, make sure the image gets resized too
+                if not hasattr(self.image_label, 'resizeEvent_original'):
+                    self.image_label.resizeEvent_original = self.image_label.resizeEvent
+                    
+                    def new_resize_event(event):
+                        # Call the original resize event handler
+                        self.image_label.resizeEvent_original(event)
+                        # Re-display the current image to adjust scaling
+                        if self.current_images and index < len(self.current_images):
+                            # Convert PIL image to QPixmap
+                            current_image = self.current_images[index]
+                            qim = QImage(current_image.tobytes(), current_image.width, current_image.height, QImage.Format.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qim)
+                            
+                            # Scale to the new size
+                            label_size = self.image_label.size()
+                            scaled_pixmap = pixmap.scaled(
+                                label_size.width(), 
+                                label_size.height(),
+                                Qt.AspectRatioMode.KeepAspectRatio, 
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Set the pixmap to the label
+                            self.image_label.setPixmap(scaled_pixmap)
+                    
+                    # Replace the resize event with our custom one
+                    self.image_label.resizeEvent = new_resize_event
+                
+            except Exception as e:
+                ErrorHandler.log_error(f"Error displaying image at index {index}: {str(e)}", exc_info=e)
         
-        # Use safe UI operation wrapper
-        ErrorHandler.safe_ui_operation(self, _display_operation, "Image Display Error")
+        # Use the safe_ui_operation method to handle any exceptions
+        ErrorHandler.safe_ui_operation(self, _display_operation, "Display Image Error")
 
     def show_previous_image(self):
         """Show the previous image in the batch"""
@@ -1660,22 +1740,33 @@ class MainWindow(QMainWindow):
             
     def _setup_image_navigation(self, index, total):
         """Setup image navigation UI with proper error handling"""
-        if total <= 1 or hasattr(self, 'image_nav_layout'):
-            # Update existing navigation if it exists
-            if hasattr(self, 'image_counter_label'):
+        if total <= 1:
+            # Remove navigation if it exists
+            if hasattr(self, 'image_nav_layout') and hasattr(self, 'nav_placeholder'):
                 try:
-                    self.image_counter_label.setText(f"Image {index+1}/{total}")
-                    self.prev_button.setEnabled(index > 0)
-                    self.next_button.setEnabled(index < total - 1)
+                    # Clear existing items from nav layout
+                    while self.nav_layout.count():
+                        item = self.nav_layout.takeAt(0)
+                        widget = item.widget()
+                        if widget:
+                            widget.deleteLater()
                 except RuntimeError:
                     ErrorHandler.log_warning("Navigation widgets have been deleted, cannot update")
             return
-        
+            
+        # Update existing navigation if it exists
+        if hasattr(self, 'image_counter_label'):
+            try:
+                self.image_counter_label.setText(f"Image {index+1}/{total}")
+                self.prev_button.setEnabled(index > 0)
+                self.next_button.setEnabled(index < total - 1)
+                return
+            except RuntimeError:
+                ErrorHandler.log_warning("Navigation widgets have been deleted, cannot create new ones")
+                
         # Create new navigation for multiple images
         try:
             # Create navigation buttons for browsing images
-            self.image_nav_layout = QHBoxLayout()
-            
             self.prev_button = QPushButton("Previous")
             self.prev_button.clicked.connect(self.show_previous_image)
             self.prev_button.setEnabled(False)  # Disabled at first image
@@ -1687,61 +1778,39 @@ class MainWindow(QMainWindow):
             self.next_button.clicked.connect(self.show_next_image)
             self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
             
-            self.image_nav_layout.addWidget(self.prev_button)
-            self.image_nav_layout.addWidget(self.image_counter_label)
-            self.image_nav_layout.addWidget(self.next_button)
+            # Add widgets to the navigation layout
+            self.nav_layout.addWidget(self.prev_button)
+            self.nav_layout.addWidget(self.image_counter_label)
+            self.nav_layout.addWidget(self.next_button)
             
-            # Insert navigation layout into main UI
-            self._insert_navigation_layout()
+            # Make sure the nav_placeholder is visible
+            self.nav_placeholder.setVisible(True)
+            
+            ErrorHandler.log_info(f"Created image navigation for {total} images, current index {index}")
         except Exception as e:
             ErrorHandler.log_error(f"Failed to create image navigation: {str(e)}", exc_info=e)
 
     def _insert_navigation_layout(self):
-        """Insert navigation layout into the main UI with robust error handling"""
-        # Find the layout that contains the image label
-        inserted = False
+        """This method is kept for compatibility with the old code but is not needed with the new layout"""
+        pass  # Navigation is now added directly to the right panel in __init__
         
-        # Try central widget's layout first
-        try:
-            main_widget = self.centralWidget().widget()
-            if main_widget and hasattr(main_widget, 'layout'):
-                layout = main_widget.layout()
-                if layout and layout.count() > 0:
-                    insert_pos = max(0, layout.count() - 1)
-                    layout.insertLayout(insert_pos, self.image_nav_layout)
-                    ErrorHandler.log_info(f"Added image navigation at position {insert_pos}")
-                    inserted = True
-        except Exception as e:
-            ErrorHandler.log_warning(f"Could not add navigation to main widget layout: {str(e)}")
-        
-        # Try alternate approach if first method failed
-        if not inserted:
+    def _remove_image_navigation(self):
+        """Remove navigation buttons"""
+        if hasattr(self, 'nav_placeholder'):
             try:
-                scroll_area = self.centralWidget()
-                if isinstance(scroll_area, QScrollArea) and scroll_area.widget():
-                    main_widget = scroll_area.widget()
-                    main_layout = main_widget.layout()
-                    
-                    if main_layout:
-                        # Find where to insert navigation - before save button
-                        insert_pos = 0
-                        for i in range(main_layout.count()):
-                            item = main_layout.itemAt(i)
-                            if item and item.widget():
-                                if isinstance(item.widget(), QPushButton) and "Save" in item.widget().text():
-                                    insert_pos = i
-                                    break
-                        
-                        # Insert navigation layout at the determined position
-                        main_layout.insertLayout(insert_pos, self.image_nav_layout)
-                        ErrorHandler.log_info(f"Added image navigation using alternate method at position {insert_pos}")
-                        inserted = True
+                # Clear the navigation layout
+                while self.nav_layout.count():
+                    item = self.nav_layout.takeAt(0)
+                    widget = item.widget()
+                    if widget:
+                        widget.deleteLater()
+                
+                # Hide the placeholder when not needed
+                self.nav_placeholder.setVisible(False)
+                
+                ErrorHandler.log_info("Image navigation removed")
             except Exception as e:
-                ErrorHandler.log_error(f"Failed to add navigation using alternate method: {str(e)}")
-        
-        # Log warning if we couldn't insert the navigation
-        if not inserted:
-            ErrorHandler.log_warning("Could not find suitable layout for image navigation")
+                ErrorHandler.log_error(f"Failed to remove image navigation: {str(e)}", exc_info=e)
 
     def on_local_model_changed(self, model_name):
         """Handle change in local model selection"""
@@ -2422,56 +2491,6 @@ class MainWindow(QMainWindow):
             except:
                 print("Failed to save image due to error")
 
-    def _remove_image_navigation(self):
-        """Safely remove image navigation layout with proper error handling"""
-        try:
-            # Get the layout containing the image navigation
-            main_widget = self.centralWidget().widget()
-            
-            if main_widget and hasattr(main_widget, 'layout'):
-                layout = main_widget.layout()
-                
-                # Only proceed if layout exists and is not None
-                if layout:
-                    # Remove the old navigation widgets
-                    while self.image_nav_layout.count():
-                        item = self.image_nav_layout.takeAt(0)
-                        if item.widget():
-                            item.widget().deleteLater()
-                    
-                    # Remove the layout itself
-                    layout.removeItem(self.image_nav_layout)
-                else:
-                    # Try alternate approach for finding the layout
-                    scroll_area = self.centralWidget()
-                    if isinstance(scroll_area, QScrollArea) and scroll_area.widget():
-                        main_widget = scroll_area.widget()
-                        main_layout = main_widget.layout()
-                        
-                        if main_layout:
-                            # Remove the old navigation widgets
-                            while self.image_nav_layout.count():
-                                item = self.image_nav_layout.takeAt(0)
-                                if item.widget():
-                                    item.widget().deleteLater()
-                            
-                            # Remove the layout itself
-                            main_layout.removeItem(self.image_nav_layout)
-        except Exception as e:
-            ErrorHandler.log_warning(f"Error removing image navigation: {str(e)}")
-        finally:
-            # Delete the navigation layout attribute regardless of whether we found a layout
-            if hasattr(self, 'image_nav_layout'):
-                delattr(self, 'image_nav_layout')
-            
-            # Clear references to navigation widgets
-            if hasattr(self, 'prev_button'):
-                delattr(self, 'prev_button')
-            if hasattr(self, 'next_button'):
-                delattr(self, 'next_button')
-            if hasattr(self, 'image_counter_label'):
-                delattr(self, 'image_counter_label')
-
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
     model_files = []
@@ -3035,23 +3054,24 @@ class ErrorHandler:
         cls.log_error(f"UI Error: {error_msg}", exc_info=error)
         
         # Only show dialog if requested and if parent widget is still valid
-        if show_dialog and parent and not parent.isDestroyed():
+        # In PyQt6, we should check if the widget exists and is visible
+        if show_dialog and parent and parent.isVisible():
             try:
                 msg_box = QMessageBox(parent)
                 msg_box.setIcon(QMessageBox.Icon.Critical)
                 msg_box.setWindowTitle(title)
                 msg_box.setText(error_msg)
                 
-                # Add details if provided
                 if details:
                     msg_box.setDetailedText(details)
-                
+                    
                 msg_box.exec()
             except Exception as dialog_error:
-                # If we can't show the dialog, just log it
+                # If we can't show a dialog, fall back to console output
                 cls.log_error(f"Failed to show error dialog: {str(dialog_error)}")
-        
-        return error_msg
+                print(f"ERROR: {title} - {error_msg}")
+                
+        return error  # Return the error to allow for chaining
 
     @classmethod
     def handle_generation_error(cls, parent, error, title="Generation Error"):
