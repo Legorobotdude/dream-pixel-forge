@@ -729,13 +729,15 @@ class MainWindow(QMainWindow):
         
         # Model selection
         model_layout = QHBoxLayout()
-        model_label = QLabel("Model:")
+        model_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
         
         # Create a tabbed interface for model selection
         self.model_tabs = QTabWidget()
-        self.model_tabs.setMinimumHeight(150)  # Set minimum height to ensure content is visible
+        # Make it very compact
+        self.model_tabs.setMinimumHeight(80)
+        self.model_tabs.setMaximumHeight(120)
         
-        # Improve tab appearance
+        # Improve tab appearance with more compact styling
         self.model_tabs.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #666;
@@ -749,8 +751,8 @@ class MainWindow(QMainWindow):
                 border-bottom: none;
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
-                padding: 8px 12px;
-                min-width: 120px;
+                padding: 4px 8px;
+                min-width: 100px;
             }
             QTabBar::tab:selected {
                 background-color: #555;
@@ -764,8 +766,10 @@ class MainWindow(QMainWindow):
         # Hugging Face models tab
         hf_tab = QWidget()
         hf_layout = QVBoxLayout(hf_tab)
+        hf_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
+        hf_layout.setSpacing(1)  # Minimal spacing
         
-        # Create a more visible layout for the dropdown
+        # Create a more compact layout for the dropdown - using horizontal layout
         model_container = QFrame()
         model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         model_container.setStyleSheet("""
@@ -773,13 +777,19 @@ class MainWindow(QMainWindow):
                 background-color: #444;
                 border: 1px solid #666;
                 border-radius: 4px;
-                padding: 10px;
-                margin: 5px;
+                padding: 3px;
+                margin: 1px;
             }
         """)
-        model_container_layout = QVBoxLayout(model_container)
-        model_label = QLabel("Select HuggingFace Model:")
-        model_label.setStyleSheet("font-weight: bold; color: white;")
+        
+        # Create a horizontal layout for the label and dropdown
+        model_container_layout = QHBoxLayout(model_container)
+        model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
+        model_container_layout.setSpacing(5)  # Small spacing between label and dropdown
+        
+        hf_model_label = QLabel("Select HuggingFace Model:")
+        hf_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
+        hf_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
         
         # Use the right control based on platform
         if platform.system() == 'Darwin':  # macOS
@@ -793,20 +803,21 @@ class MainWindow(QMainWindow):
             self.model_combo.currentTextChanged.connect(self.on_model_changed)
             # Set initial selection
             self.model_combo.setCurrentText("Stable Diffusion 1.5")
-            
-        model_container_layout.addWidget(model_label)
+        
+        model_container_layout.addWidget(hf_model_label)
         model_container_layout.addWidget(self.model_combo)
         
         # Add to tab layout with proper spacing
         hf_layout.addWidget(model_container)
-        hf_layout.addStretch(1)  # Add stretch to push the dropdown to the top
         self.model_tabs.addTab(hf_tab, "Hugging Face Models")
         
         # Local models tab
         local_tab = QWidget()
         local_layout = QVBoxLayout(local_tab)
+        local_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
+        local_layout.setSpacing(1)  # Minimal spacing
         
-        # Create a more visible layout for the dropdown
+        # Create a more compact layout for the dropdown - using horizontal layout
         local_model_container = QFrame()
         local_model_container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         local_model_container.setStyleSheet("""
@@ -814,16 +825,24 @@ class MainWindow(QMainWindow):
                 background-color: #444;
                 border: 1px solid #666;
                 border-radius: 4px;
-                padding: 10px;
-                margin: 5px;
+                padding: 3px;
+                margin: 1px;
             }
         """)
-        local_model_container_layout = QVBoxLayout(local_model_container)
-        local_model_label = QLabel("Select Local Model:")
-        local_model_label.setStyleSheet("font-weight: bold; color: white;")
         
-        # Create a horizontal layout for the model dropdown and buttons
+        # Create a horizontal layout for the model section
+        local_model_container_layout = QHBoxLayout(local_model_container)
+        local_model_container_layout.setContentsMargins(3, 3, 3, 3)  # Minimal margins
+        local_model_container_layout.setSpacing(5)  # Small spacing
+        
+        local_model_label = QLabel("Select Local Model:")
+        local_model_label.setStyleSheet("font-weight: bold; color: white; font-size: 11px;")
+        local_model_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)  # Keep label size fixed
+        
+        # Create a layout for the dropdown and manage button
         local_controls_layout = QHBoxLayout()
+        local_controls_layout.setSpacing(5)  # Small spacing
+        local_controls_layout.setContentsMargins(0, 0, 0, 0)  # No margins
         
         # Use the right control based on platform
         if platform.system() == 'Darwin':  # macOS
@@ -834,27 +853,33 @@ class MainWindow(QMainWindow):
             self.local_model_combo.currentTextChanged.connect(self.on_local_model_changed)
             
         manage_models_btn = QPushButton("Manage Models")
+        manage_models_btn.setMaximumHeight(25)  # Limit height
+        manage_models_btn.setStyleSheet("font-size: 11px; padding: 2px 5px;")
         manage_models_btn.clicked.connect(self.open_manage_models)
         
+        # Add label directly to the container layout
+        local_model_container_layout.addWidget(local_model_label)
+        
+        # Add combo and button to the controls layout
         local_controls_layout.addWidget(self.local_model_combo, 3)  # Give dropdown more space
         local_controls_layout.addWidget(manage_models_btn, 1)
         
-        local_model_container_layout.addWidget(local_model_label)
-        local_model_container_layout.addLayout(local_controls_layout)
+        # Add the controls layout to the container layout
+        local_model_container_layout.addLayout(local_controls_layout, 1)
         
         # Add to tab layout with proper spacing
         local_layout.addWidget(local_model_container)
-        local_layout.addStretch(1)  # Add stretch to push controls to the top
         self.model_tabs.addTab(local_tab, "Local Models")
         
         # Connect tab change to update model info
         self.model_tabs.currentChanged.connect(self.update_model_info_from_tabs)
         
-        # Add a model info label
+        # Add a model info label with compact styling
         self.model_info = QLabel(AVAILABLE_MODELS["Stable Diffusion 1.5"]["description"])
         self.model_info.setWordWrap(True)
+        self.model_info.setStyleSheet("font-size: 11px; color: #aaa; margin-top: 0px;")
+        self.model_info.setMaximumHeight(40)  # Limit height of model info
         
-        model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_tabs)
         input_layout.addLayout(model_layout)
         input_layout.addWidget(self.model_info)
