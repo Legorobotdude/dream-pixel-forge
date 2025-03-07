@@ -812,11 +812,17 @@ class MainWindow(QMainWindow):
         self.left_layout.setSpacing(8)
         self.left_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
         
+        # Set minimum width for left panel to prevent excessive squeezing
+        left_panel.setMinimumWidth(300)
+        
         # Right panel - image display
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(8)
         right_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
+        
+        # Set minimum width for right panel
+        right_panel.setMinimumWidth(350)
         
         # Model selection section using CollapsibleSection
         model_section = CollapsibleSection("Model Selection")
@@ -1168,14 +1174,34 @@ class MainWindow(QMainWindow):
         # Image display with proper sizing
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumSize(384, 384)  # Smaller minimum size
+        self.image_label.setMinimumSize(350, 350)  # Slightly reduced minimum size
         self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_label.setStyleSheet("border: 1px solid #666; background-color: #2a2a2a;")
+        
+        # Setup custom resize event for image label once at initialization
+        self.image_label.resizeEvent_original = self.image_label.resizeEvent
+        
+        # Define a custom resize event that will redisplay the current image when the label is resized
+        def image_label_resize_event(event):
+            # Call the original resize event handler
+            self.image_label.resizeEvent_original(event)
+            
+            # Re-display the current image if one exists
+            if hasattr(self, 'current_image_index') and hasattr(self, 'current_images') and \
+               self.current_image_index is not None and self.current_images and \
+               0 <= self.current_image_index < len(self.current_images) and \
+               self.current_images[self.current_image_index] is not None:
+                self.resize_and_display_current_image()
+        
+        # Set the custom resize event handler
+        self.image_label.resizeEvent = image_label_resize_event
         
         # Navigation controls (will be added when needed)
         self.nav_placeholder = QWidget()
         self.nav_layout = QHBoxLayout(self.nav_placeholder)
         self.nav_layout.setContentsMargins(0, 0, 0, 0)
+        # Set a fixed height to prevent layout shifting
+        self.nav_placeholder.setFixedHeight(40)
         
         # Save button
         self.save_button = QPushButton("Save Image to Custom Location")
@@ -1190,11 +1216,17 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(left_panel)
         self.main_splitter.addWidget(right_panel)
         
+        # Add splitter to main layout
+        main_layout.addWidget(self.main_splitter)
+        
+        # Connect splitter's splitterMoved signal to maintain proper proportions
+        self.main_splitter.splitterMoved.connect(self.on_splitter_moved)
+        
         # Set initial sizes - 40% for controls, 60% for image
         self.main_splitter.setSizes([400, 600])
         
-        # Add splitter to main layout
-        main_layout.addWidget(self.main_splitter)
+        # Store original splitter proportions for responsive resizing
+        self.splitter_ratio = 0.4  # 40% for left panel
         
         self.current_images = []
         self.generation_thread = None
@@ -1868,38 +1900,7 @@ class MainWindow(QMainWindow):
                 image_info = f"Image {index+1}/{len(self.current_images)}"
                 self.setWindowTitle(f"DreamPixelForge - Text to Image - {image_info}")
                 
-                # When the image label is resized, make sure the image gets resized too
-                if not hasattr(self.image_label, 'resizeEvent_original'):
-                    self.image_label.resizeEvent_original = self.image_label.resizeEvent
-                    
-                    def new_resize_event(event):
-                        # Call the original resize event handler
-                        self.image_label.resizeEvent_original(event)
-                        # Re-display the current image to adjust scaling
-                        if self.current_images and index < len(self.current_images):
-                            # Convert PIL image to QPixmap
-                            current_image = self.current_images[index]
-                            # Skip if image is None
-                            if current_image is None:
-                                return
-                            
-                            qim = QImage(current_image.tobytes(), current_image.width, current_image.height, QImage.Format.Format_RGB888)
-                            pixmap = QPixmap.fromImage(qim)
-                            
-                            # Scale to the new size
-                            label_size = self.image_label.size()
-                            scaled_pixmap = pixmap.scaled(
-                                label_size.width(), 
-                                label_size.height(),
-                                Qt.AspectRatioMode.KeepAspectRatio, 
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Set the pixmap to the label
-                            self.image_label.setPixmap(scaled_pixmap)
-                    
-                    # Replace the resize event with our custom one
-                    self.image_label.resizeEvent = new_resize_event
+                # No need to add the resize event handler here anymore since we set it in __init__
                 
             except Exception as e:
                 ErrorHandler.log_error(f"Error displaying image at index {index}: {str(e)}", exc_info=e)
@@ -1964,7 +1965,7 @@ class MainWindow(QMainWindow):
             ErrorHandler.handle_ui_error(self, e, "Navigation Error")
             
     def _setup_image_navigation(self, index, total):
-        """Setup image navigation UI with proper error handling"""
+        """Setup image navigation UI with proper error handling and responsive layout"""
         if total <= 1:
             # Remove navigation if it exists
             if hasattr(self, 'image_nav_layout') and hasattr(self, 'nav_placeholder'):
@@ -1995,13 +1996,16 @@ class MainWindow(QMainWindow):
             self.prev_button = QPushButton("Previous")
             self.prev_button.clicked.connect(self.show_previous_image)
             self.prev_button.setEnabled(False)  # Disabled at first image
+            self.prev_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             
             self.image_counter_label = QLabel(f"Image {index+1}/{total}")
             self.image_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.image_counter_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             
             self.next_button = QPushButton("Next")
             self.next_button.clicked.connect(self.show_next_image)
             self.next_button.setEnabled(index < total - 1)  # Only enabled if there are more images
+            self.next_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             
             # Add widgets to the navigation layout
             self.nav_layout.addWidget(self.prev_button)
@@ -2010,6 +2014,9 @@ class MainWindow(QMainWindow):
             
             # Make sure the nav_placeholder is visible
             self.nav_placeholder.setVisible(True)
+            
+            # Set fixed height for the navigation area to prevent layout jumping
+            self.nav_placeholder.setFixedHeight(40)
             
             ErrorHandler.log_info(f"Created image navigation for {total} images, current index {index}")
         except Exception as e:
@@ -2854,6 +2861,64 @@ class MainWindow(QMainWindow):
                 print(f"Auto-saved image despite errors: {file_path}")
             except:
                 print("Failed to save image due to error")
+
+    def on_splitter_moved(self, index, new_pos):
+        """Handle splitter movement and maintain proportions"""
+        # When splitter is moved, get the current sizes
+        current_sizes = self.main_splitter.sizes()
+        
+        # Calculate new ratio if we have valid sizes
+        if len(current_sizes) >= 2 and sum(current_sizes) > 0:
+            self.splitter_ratio = current_sizes[0] / sum(current_sizes)
+        else:
+            self.splitter_ratio = 0.4  # Default to 40% if there's an issue
+
+    def responsive_resize_event(self, event):
+        """Custom resize event that maintains splitter proportions"""
+        # Call original resize event first
+        self.original_resize_event(event)
+        
+        # Calculate and set new splitter sizes based on stored ratio
+        total_width = self.main_splitter.width()
+        left_width = int(total_width * self.splitter_ratio)
+        right_width = total_width - left_width
+        
+        # Only update if significant change to avoid infinite loops
+        current_sizes = self.main_splitter.sizes()
+        if abs(current_sizes[0] - left_width) > 5:  # 5 pixel threshold
+            self.main_splitter.setSizes([left_width, right_width])
+            
+        # Recalculate image label dimensions for proper scaling
+        if hasattr(self, 'image_label') and hasattr(self, 'current_image_index') and \
+           self.current_image_index is not None and self.current_images and \
+           0 <= self.current_image_index < len(self.current_images) and \
+           self.current_images[self.current_image_index] is not None:
+            # Trigger redisplay of current image to adapt to new size
+            self.display_image(self.current_image_index)
+
+    def resize_and_display_current_image(self):
+        """Resize and display the current image in the image_label"""
+        if self.current_image_index is not None and self.current_images and \
+           0 <= self.current_image_index < len(self.current_images) and \
+           self.current_images[self.current_image_index] is not None:
+            # Get the current image
+            current_image = self.current_images[self.current_image_index]
+            
+            # Convert PIL image to QPixmap
+            qim = QImage(current_image.tobytes(), current_image.width, current_image.height, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qim)
+            
+            # Scale to the new size
+            label_size = self.image_label.size()
+            scaled_pixmap = pixmap.scaled(
+                label_size.width(), 
+                label_size.height(),
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.SmoothTransformation
+            )
+            
+            # Set the pixmap to the label
+            self.image_label.setPixmap(scaled_pixmap)
 
 def scan_local_models():
     """Scan the models directory for safetensors and ckpt files"""
