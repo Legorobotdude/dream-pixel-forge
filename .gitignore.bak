@@ -18,17 +18,6 @@ build/
 # PyInstaller
 *.manifest
 *.spec
-# Exception for our specific spec file
-!DreamPixelForge.spec
-# PyInstaller build artifacts
-*.pkg
-warn-*.txt
-xref-*.html
-*.dmg
-*.app
-*.exe
-*.tar.gz
-*.zip
 
 # IDE files
 .idea/
@@ -62,14 +51,5 @@ generated/
 
 # OS specific
 .DS_Store
-Thumbs.db
+Thumbs.db 
 dream_pixel_forge.log
-
-# Coverage reports
-.coverage
-htmlcov/
-coverage_report/
-.pytest_cache/
-
-# Temporary packaging directories
-_temp_*/
