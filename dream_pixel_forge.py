@@ -121,9 +121,9 @@ class OllamaClient:
         """
         try:
             if mode == "tags":
-                system_prompt = "You are a helpful assistant specialized in enhancing image generation prompts. The user will provide tags or keywords for an image. Respond ONLY with the original tags plus 3-5 additional very closely related tags that would improve the image generation. Focus on maintaining the exact same style and concept, just adding a few highly relevant terms. Format all tags as a single comma-separated list. Do not include explanations or other text in your response. Keep the style consistent with the original prompt."
+                system_prompt = "You are a helpful assistant specialized in enhancing image generation prompts. The user will provide tags or keywords for an image. Respond ONLY with a comma-separated list of tags consisting of the original tags plus 3-5 additional very closely related tags that would improve the image generation. FORMAT ONLY AS TAGS SEPARATED BY COMMAS WITH NO OTHER TEXT. For example, if the user says 'cat', respond with 'cat, feline, kitten, cute pet, whiskers'. Do not include any explanations, bullet points, quotation marks, or other formatting."
             else:  # description
-                system_prompt = "You are a helpful assistant specialized in converting descriptive text into image generation tags. The user will provide a description of an image. Respond only with a concise list of 5-10 essential tags/keywords that would help generate this image, separated by commas. Focus only on the most important visual elements in the description. Optimize the tags for image generation quality. Format your response as a simple comma-separated list with no other text or explanations."
+                system_prompt = "You are a helpful assistant specialized in converting descriptive text into image generation tags. The user will provide a description of an image. Respond ONLY with a concise comma-separated list of 5-10 essential tags/keywords that would help generate this image. FORMAT ONLY AS TAGS SEPARATED BY COMMAS WITH NO OTHER TEXT. For example, if the user says 'a painting of a mountain landscape at sunset', respond with 'mountain landscape, sunset, painting, golden hour, peaks, scenic vista, dramatic sky, nature'. Do not include any explanations, bullet points, quotation marks, or other formatting."
             
             data = {
                 "model": model,
@@ -136,7 +136,17 @@ class OllamaClient:
             
             response = requests.post(f"{self.base_url}/api/chat", json=data)
             if response.status_code == 200:
-                return response.json().get("message", {}).get("content", "")
+                content = response.json().get("message", {}).get("content", "")
+                
+                # Basic cleanup of the content
+                content = content.strip()
+                content = content.replace('"', '').replace("'", '')  # Remove quotation marks
+                
+                # Remove any "Tags:" or similar prefixes
+                if ":" in content and not "http:" in content and not "https:" in content:
+                    content = content.split(":", 1)[1].strip()
+                
+                return content
             else:
                 return f"Error: {response.status_code}"
         except Exception as e:
@@ -161,6 +171,27 @@ class OllamaThread(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+class OllamaRefreshThread(QThread):
+    """Thread for refreshing Ollama models to keep UI responsive"""
+    finished = pyqtSignal(list)  # Emits list of model names
+    error = pyqtSignal(str)
+    
+    def __init__(self, base_url="http://localhost:11434"):
+        super().__init__()
+        self.base_url = base_url
+        
+    def run(self):
+        try:
+            response = requests.get(f"{self.base_url}/api/tags")
+            if response.status_code == 200:
+                models_data = response.json()
+                model_names = [model['name'] for model in models_data['models']]
+                self.finished.emit(model_names)
+            else:
+                self.error.emit(f"Failed to connect to Ollama API. Status code: {response.status_code}")
+        except Exception as e:
+            self.error.emit(f"Failed to connect to Ollama API: {str(e)}")
+            
 # Local model registry to store information about local models
 LOCAL_MODELS = {}  # Will be populated when local models are added
 
@@ -936,11 +967,11 @@ class MainWindow(QMainWindow):
             # Use the right control based on platform
             if IS_MACOS:  # macOS
                 self.ollama_model_combo = MacDropdownButton(self.ollama_models)
-                self.ollama_model_combo.currentTextChanged.connect(self.refresh_ollama_models)
+                # Don't connect directly to refresh_ollama_models to avoid UI freezing
             else:
                 self.ollama_model_combo = QComboBox()
                 self.ollama_model_combo.addItems(self.ollama_models)
-                self.ollama_model_combo.currentTextChanged.connect(self.refresh_ollama_models)
+                # Don't connect directly to refresh_ollama_models to avoid UI freezing
             
             refresh_ollama_button = QPushButton("Refresh")
             refresh_ollama_button.setMaximumWidth(70)
@@ -2106,22 +2137,18 @@ class MainWindow(QMainWindow):
             
     def refresh_ollama_models(self):
         # Fetch available models from Ollama
-        self.ollama_models = []
-        try:
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                models_data = response.json()
-                self.ollama_models = [model['name'] for model in models_data['models']]
-            else:
-                QMessageBox.warning(
-                    self, "Connection Error", 
-                    f"Failed to connect to Ollama API. Status code: {response.status_code}"
-                )
-        except Exception as e:
-            QMessageBox.warning(
-                self, "Connection Error", 
-                f"Failed to connect to Ollama API: {str(e)}"
-            )
+        self.status_label.setText("Fetching Ollama models...")
+        
+        # Create and start the OllamaRefreshThread
+        self.ollama_refresh_thread = OllamaRefreshThread()
+        self.ollama_refresh_thread.finished.connect(self.handle_ollama_models_refreshed)
+        self.ollama_refresh_thread.error.connect(self.handle_ollama_error)
+        self.ollama_refresh_thread.start()
+    
+    def handle_ollama_models_refreshed(self, model_names):
+        """Handle the refreshed list of Ollama models"""
+        self.ollama_models = model_names
+        self.status_label.setText("Ollama models refreshed")
         
         # Update the model dropdown
         if IS_MACOS:  # macOS
@@ -2175,8 +2202,39 @@ class MainWindow(QMainWindow):
         self.enhance_button.setEnabled(True)
         self.status_label.setText("Prompt enhanced successfully")
         
+        # Parse the response to extract just the tags
+        cleaned_prompt = enhanced_prompt
+        
+        # Handle explanatory text responses
+        if "*" in enhanced_prompt or ":" in enhanced_prompt or "Here" in enhanced_prompt:
+            try:
+                # Try to extract comma-separated tags first
+                import re
+                
+                # Look for lists with asterisks (bullet points)
+                if "*" in enhanced_prompt:
+                    # Extract words/phrases following asterisks
+                    bullet_items = re.findall(r'\*\s*(.*?)(?=\n\*|\n\n|$)', enhanced_prompt)
+                    if bullet_items:
+                        cleaned_prompt = ", ".join(item.strip() for item in bullet_items)
+                
+                # If there's still explanatory text, try to find comma-separated lists
+                if "Here" in cleaned_prompt or ":" in cleaned_prompt:
+                    # Find any comma-separated list in the text
+                    comma_lists = re.findall(r'[^.]*?(\w+(?:,\s*\w+)+)[^.]*', enhanced_prompt)
+                    if comma_lists:
+                        # Take the longest comma-separated list
+                        cleaned_prompt = max(comma_lists, key=len)
+                
+                # Final cleanup
+                cleaned_prompt = re.sub(r'^\W+|\W+$', '', cleaned_prompt)  # Remove leading/trailing non-word chars
+            except Exception as e:
+                ErrorHandler.log_error(f"Error parsing enhanced prompt: {str(e)}")
+                # If parsing fails, keep the original but log the error
+                pass
+        
         # Set the enhanced prompt as the main prompt
-        self.prompt_input.setText(enhanced_prompt)
+        self.prompt_input.setText(cleaned_prompt)
         
         # Clear the enhance input
         self.enhance_input.clear()
