@@ -42,17 +42,7 @@ A modern GUI application for running multiple AI image generation models locally
 
 ## Installation
 
-### Pre-packaged Installers (Recommended)
-
-We now provide pre-packaged installers for easy installation without having to set up Python and dependencies manually:
-
-1. Download the latest release package for your operating system from our release page
-2. Follow the instructions in the [INSTALLATION.md](INSTALLATION.md) guide
-3. Start generating amazing images right away!
-
-### Manual Installation (From Source)
-
-#### Windows/Linux
+### Windows/Linux
 
 1. Clone this repository:
    ```bash
