@@ -772,8 +772,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DreamPixelForge - Text to Image")
         self.setGeometry(100, 100, 1000, 800)  # Slightly smaller default size
         
-        # Apply theme
-        ThemeManager.apply_theme(QApplication.instance(), "dark")
+        # Apply modern flat theme
+        ThemeManager.apply_theme(QApplication.instance(), "modern_flat")
         
         # Create menu bar
         self.create_menu()
@@ -2015,9 +2015,6 @@ class MainWindow(QMainWindow):
             # Make sure the nav_placeholder is visible
             self.nav_placeholder.setVisible(True)
             
-            # Set fixed height for the navigation area to prevent layout jumping
-            self.nav_placeholder.setFixedHeight(40)
-            
             ErrorHandler.log_info(f"Created image navigation for {total} images, current index {index}")
         except Exception as e:
             ErrorHandler.log_error(f"Failed to create image navigation: {str(e)}", exc_info=e)
@@ -2027,7 +2024,7 @@ class MainWindow(QMainWindow):
         pass  # Navigation is now added directly to the right panel in __init__
         
     def _remove_image_navigation(self):
-        """Remove navigation buttons without affecting layout"""
+        """Remove navigation buttons"""
         if hasattr(self, 'nav_placeholder'):
             try:
                 # Clear the navigation layout
@@ -2037,8 +2034,8 @@ class MainWindow(QMainWindow):
                     if widget:
                         widget.deleteLater()
                 
-                # Keep placeholder visible but empty to maintain layout consistency
-                self.nav_placeholder.setVisible(True)
+                # Hide the placeholder when not needed
+                self.nav_placeholder.setVisible(False)
                 
                 ErrorHandler.log_info("Image navigation removed")
             except Exception as e:
@@ -3721,6 +3718,44 @@ class ThemeManager:
                 "size_large": "15px",
                 "size_header": "16px",
             }
+        },
+        "modern_flat": {
+            "name": "Modern Flat Design",
+            "colors": {
+                "background": "#1a1a2e",
+                "card_background": "#16213e",
+                "text_primary": "#e6e6e6",
+                "text_secondary": "#a0a0a0",
+                "accent": "#0f3460",
+                "accent_hover": "#1a4b88",
+                "accent_secondary": "#e94560",
+                "accent_secondary_hover": "#ff5e78",
+                "border": "#2c2c44",
+                "input_background": "#24243e",
+                "button_background": "#0f3460",
+                "button_hover": "#1a4b88",
+                "success": "#2ecc71",
+                "warning": "#f39c12",
+                "error": "#e74c3c",
+                "progress": "#3498db",
+                "disabled": "#555565",
+            },
+            "borders": {
+                "radius": "8px",
+                "width": "0px",  # No borders for true flat design
+            },
+            "spacing": {
+                "small": "6px",
+                "medium": "12px",
+                "large": "20px",
+            },
+            "fonts": {
+                "family": "'SF Pro Display', 'Roboto', 'Segoe UI', Arial, sans-serif",
+                "size_small": "12px",
+                "size_normal": "14px",
+                "size_large": "16px",
+                "size_header": "18px",
+            }
         }
     }
     
@@ -3737,6 +3772,9 @@ class ThemeManager:
         borders = theme["borders"]
         spacing = theme["spacing"]
         fonts = theme["fonts"]
+        
+        # Check if this is the modern flat theme
+        is_modern_flat = theme_name == "modern_flat"
         
         # Core application style
         stylesheet = f"""
@@ -3763,12 +3801,13 @@ class ThemeManager:
                 border-radius: {borders["radius"]};
                 padding: {spacing["medium"]} {spacing["large"]};
                 font-size: {fonts["size_normal"]};
-                min-height: 28px;
+                min-height: 32px;
+                text-align: center;
             }}
             
             QPushButton:hover {{
                 background-color: {colors["button_hover"]};
-                border-color: {colors["accent"]};
+                border-color: {colors["accent_hover"] if is_modern_flat and "accent_hover" in colors else colors["accent"]};
             }}
             
             QPushButton:pressed {{
@@ -3784,14 +3823,20 @@ class ThemeManager:
             
             /* Primary action button */
             QPushButton#primaryButton {{
-                background-color: {colors["accent"]};
+                background-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
                 color: white;
                 font-weight: bold;
-                min-height: 36px;
+                min-height: 40px;
+                font-size: {fonts["size_large"]};
+                border: {borders["width"]} solid transparent;
             }}
             
             QPushButton#primaryButton:hover {{
-                background-color: {colors["accent_hover"]};
+                background-color: {colors["accent_secondary_hover"] if is_modern_flat and "accent_secondary_hover" in colors else colors["accent_hover"]};
+            }}
+            
+            QPushButton#primaryButton:pressed {{
+                background-color: {colors["accent"]};
             }}
             
             /* Custom collapsible section styling */
@@ -3816,7 +3861,7 @@ class ThemeManager:
             #disclosureTriangle {{
                 background-color: transparent;
                 border: none;
-                color: {colors["accent"]};
+                color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
                 font-size: 14px;
                 font-weight: bold;
                 padding: 0;
@@ -3824,7 +3869,7 @@ class ThemeManager:
             }}
             
             #disclosureTriangle:hover {{
-                color: {colors["accent_hover"]};
+                color: {colors["accent_secondary_hover"] if is_modern_flat and "accent_secondary_hover" in colors else colors["accent_hover"]};
             }}
             
             #sectionContent {{
@@ -3839,7 +3884,7 @@ class ThemeManager:
                 border: {borders["width"]} solid {colors["border"]};
                 border-radius: {borders["radius"]};
                 padding: {spacing["medium"]};
-                min-height: 25px;
+                min-height: 30px;
                 selection-background-color: {colors["accent"]};
             }}
             
@@ -3858,7 +3903,7 @@ class ThemeManager:
                 border: {borders["width"]} solid {colors["border"]};
                 border-radius: {borders["radius"]};
                 padding: {spacing["medium"]};
-                min-height: 25px;
+                min-height: 30px;
                 selection-background-color: {colors["accent"]};
             }}
             
@@ -3869,8 +3914,8 @@ class ThemeManager:
             QComboBox::drop-down {{
                 subcontrol-origin: padding;
                 subcontrol-position: center right;
-                width: 15px;
-                border-left: 1px solid {colors["border"]};
+                width: 20px;
+                border-left: {borders["width"] if borders["width"] != "0px" else "1px"} solid {colors["border"]};
             }}
             
             QComboBox QAbstractItemView {{
@@ -3879,6 +3924,27 @@ class ThemeManager:
                 border: {borders["width"]} solid {colors["border"]};
                 selection-background-color: {colors["accent"]};
                 selection-color: white;
+                border-radius: {borders["radius"]};
+            }}
+            
+            /* Labels */
+            QLabel {{
+                color: {colors["text_primary"]};
+                font-size: {fonts["size_normal"]};
+            }}
+            
+            /* Make section titles distinct */
+            QLabel[sectionTitle="true"] {{
+                font-size: {fonts["size_header"]};
+                font-weight: bold;
+                color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
+                margin-top: {spacing["large"]};
+                margin-bottom: {spacing["medium"]};
+            }}
+            
+            QLabel[labelType="caption"] {{
+                font-size: {fonts["size_small"]};
+                color: {colors["text_secondary"]};
             }}
             
             /* Spin boxes (number inputs) */
@@ -3888,7 +3954,7 @@ class ThemeManager:
                 border: {borders["width"]} solid {colors["border"]};
                 border-radius: {borders["radius"]};
                 padding: {spacing["small"]};
-                min-height: 25px;
+                min-height: 30px;
             }}
             
             QSpinBox:hover, QDoubleSpinBox:hover {{
@@ -3899,30 +3965,13 @@ class ThemeManager:
             QSpinBox::down-button, QDoubleSpinBox::down-button {{
                 border: none;
                 background-color: {colors["button_background"]};
-                width: 16px;
+                width: 20px;
+                border-radius: {borders["radius"]};
             }}
             
             QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
             QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
                 background-color: {colors["button_hover"]};
-            }}
-            
-            /* Labels */
-            QLabel {{
-                color: {colors["text_primary"]};
-                background-color: transparent;
-            }}
-            
-            QLabel[labelType="heading"] {{
-                font-size: {fonts["size_header"]};
-                font-weight: bold;
-                color: {colors["text_primary"]};
-                margin-bottom: {spacing["medium"]};
-            }}
-            
-            QLabel[labelType="caption"] {{
-                font-size: {fonts["size_small"]};
-                color: {colors["text_secondary"]};
             }}
             
             /* Progress bar */
@@ -3936,7 +3985,7 @@ class ThemeManager:
             }}
             
             QProgressBar::chunk {{
-                background-color: {colors["progress"]};
+                background-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["progress"]};
                 border-radius: {borders["radius"]};
             }}
             
@@ -3962,7 +4011,7 @@ class ThemeManager:
             
             QTabBar::tab:selected {{
                 background-color: {colors["card_background"]};
-                border-color: {colors["accent"]};
+                border-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
                 border-bottom: none;
             }}
             
@@ -3980,30 +4029,30 @@ class ThemeManager:
                 width: 13px;
                 height: 13px;
                 border-radius: 7px;
-                border: {borders["width"]} solid {colors["border"]};
+                border: {borders["width"] if borders["width"] != "0px" else "1px"} solid {colors["border"]};
             }}
             
             QRadioButton::indicator:checked {{
-                background-color: {colors["accent"]};
+                background-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
                 border: 3px solid {colors["card_background"]};
-                outline: {borders["width"]} solid {colors["accent"]};
+                outline: {borders["width"] if borders["width"] != "0px" else "1px"} solid {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
             }}
             
             QRadioButton::indicator:hover {{
-                border-color: {colors["accent"]};
+                border-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
             }}
             
             /* Scroll bars */
             QScrollBar:vertical {{
                 background-color: {colors["background"]};
-                width: 14px;
+                width: 8px;
                 margin: 0px;
             }}
             
             QScrollBar::handle:vertical {{
                 background-color: {colors["button_background"]};
                 min-height: 20px;
-                border-radius: 6px;
+                border-radius: 4px;
                 margin: 2px;
             }}
             
@@ -4013,14 +4062,14 @@ class ThemeManager:
             
             QScrollBar:horizontal {{
                 background-color: {colors["background"]};
-                height: 14px;
+                height: 8px;
                 margin: 0px;
             }}
             
             QScrollBar::handle:horizontal {{
                 background-color: {colors["button_background"]};
                 min-width: 20px;
-                border-radius: 6px;
+                border-radius: 4px;
                 margin: 2px;
             }}
             
@@ -4047,7 +4096,7 @@ class ThemeManager:
             }}
             
             QSplitter::handle:hover {{
-                background-color: {colors["accent"]};
+                background-color: {colors["accent_secondary"] if is_modern_flat and "accent_secondary" in colors else colors["accent"]};
             }}
             
             /* Group box */
