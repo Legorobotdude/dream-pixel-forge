@@ -1386,6 +1386,22 @@ class MainWindow(QMainWindow):
         copy_action.setShortcut("Ctrl+C")
         edit_menu.addAction(copy_action)
         
+        # Presets menu
+        presets_menu = menubar.addMenu("&Presets")
+        
+        # App Icon Preset action
+        app_icon_preset_action = QAction("App Icon Generator", self)
+        app_icon_preset_action.triggered.connect(self.apply_app_icon_preset)
+        presets_menu.addAction(app_icon_preset_action)
+        
+        # Post Processing menu
+        post_processing_menu = menubar.addMenu("Post &Processing")
+        
+        # App Icon Processing action
+        app_icon_processing_action = QAction("App Icon Processing", self)
+        app_icon_processing_action.triggered.connect(self.post_process_app_icon)
+        post_processing_menu.addAction(app_icon_processing_action)
+        
         # Generate options menu
         generate_menu = menubar.addMenu("&Generate")
         
