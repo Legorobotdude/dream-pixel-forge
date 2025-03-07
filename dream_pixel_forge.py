@@ -2020,7 +2020,7 @@ class MainWindow(QMainWindow):
         pass  # Navigation is now added directly to the right panel in __init__
         
     def _remove_image_navigation(self):
-        """Remove navigation buttons"""
+        """Remove navigation buttons without affecting layout"""
         if hasattr(self, 'nav_placeholder'):
             try:
                 # Clear the navigation layout
@@ -2030,8 +2030,8 @@ class MainWindow(QMainWindow):
                     if widget:
                         widget.deleteLater()
                 
-                # Hide the placeholder when not needed
-                self.nav_placeholder.setVisible(False)
+                # Keep placeholder visible but empty to maintain layout consistency
+                self.nav_placeholder.setVisible(True)
                 
                 ErrorHandler.log_info("Image navigation removed")
             except Exception as e:
