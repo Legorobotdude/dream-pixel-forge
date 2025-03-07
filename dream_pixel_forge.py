@@ -808,9 +808,9 @@ class MainWindow(QMainWindow):
         
         # Left panel - inputs and controls
         left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setSpacing(8)
-        left_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
+        self.left_layout = QVBoxLayout(left_panel)
+        self.left_layout.setSpacing(8)
+        self.left_layout.setContentsMargins(0, 0, 0, 0)  # No margins for inner layout
         
         # Right panel - image display
         right_panel = QWidget()
@@ -908,7 +908,7 @@ class MainWindow(QMainWindow):
         model_section.addWidget(model_content)
         
         # Add section to left panel
-        left_layout.addWidget(model_section)
+        self.left_layout.addWidget(model_section)
         
         # Prompt section using CollapsibleSection
         prompt_section = CollapsibleSection("Prompt Settings")
@@ -945,7 +945,7 @@ class MainWindow(QMainWindow):
         prompt_section.addWidget(prompt_content)
         
         # Add section to left panel
-        left_layout.addWidget(prompt_section)
+        self.left_layout.addWidget(prompt_section)
         
         # Ollama prompt enhancement section using the custom collapsible section
         if self.ollama_available and self.ollama_models:
@@ -1013,7 +1013,7 @@ class MainWindow(QMainWindow):
             ollama_section.addWidget(ollama_content)
             
             # Add section to left panel
-            left_layout.addWidget(ollama_section)
+            self.left_layout.addWidget(ollama_section)
         else:
             # Show a message when Ollama is not available
             ollama_section = CollapsibleSection("Ollama Prompt Enhancement")
@@ -1040,7 +1040,7 @@ class MainWindow(QMainWindow):
             ollama_section.addWidget(ollama_content)
             
             # Add section to left panel
-            left_layout.addWidget(ollama_section)
+            self.left_layout.addWidget(ollama_section)
         
         # Parameters section using CollapsibleSection
         params_section = CollapsibleSection("Generation Parameters")
@@ -1140,14 +1140,14 @@ class MainWindow(QMainWindow):
         params_section.addWidget(params_content)
         
         # Add param section to left panel
-        left_layout.addWidget(params_section)
+        self.left_layout.addWidget(params_section)
         
         # Generate button
         self.generate_button = QPushButton("Generate Images")
         self.generate_button.setObjectName("primaryButton")
         self.generate_button.setMinimumHeight(36)  # Slightly taller for emphasis
         self.generate_button.clicked.connect(self.generate_image)
-        left_layout.addWidget(self.generate_button)
+        self.left_layout.addWidget(self.generate_button)
         
         # Status and progress
         status_layout = QHBoxLayout()
@@ -1159,10 +1159,10 @@ class MainWindow(QMainWindow):
         
         status_layout.addWidget(self.status_label)
         status_layout.addWidget(self.progress_bar)
-        left_layout.addLayout(status_layout)
+        self.left_layout.addLayout(status_layout)
         
         # Add stretch to push everything up
-        left_layout.addStretch(1)
+        self.left_layout.addStretch(1)
         
         # Right panel - image display
         # Image display with proper sizing
@@ -2136,27 +2136,135 @@ class MainWindow(QMainWindow):
             self.model_info.setText("No local models available. Use 'Manage Models' to add one.")
             
     def refresh_ollama_models(self):
-        # Fetch available models from Ollama
-        self.status_label.setText("Fetching Ollama models...")
+        """Fetch available models from Ollama"""
+        self.status_label.setText("Checking Ollama availability...")
         
-        # Create and start the OllamaRefreshThread
-        self.ollama_refresh_thread = OllamaRefreshThread()
-        self.ollama_refresh_thread.finished.connect(self.handle_ollama_models_refreshed)
-        self.ollama_refresh_thread.error.connect(self.handle_ollama_error)
-        self.ollama_refresh_thread.start()
+        # First check if Ollama is available
+        try:
+            is_available = self.ollama_client.is_available()
+            if not is_available:
+                self.status_label.setText("Ollama is not running or not installed")
+                return
+                
+            # Ollama is available, proceed with model refresh
+            self.status_label.setText("Fetching Ollama models...")
+            
+            # Create and start the OllamaRefreshThread
+            self.ollama_refresh_thread = OllamaRefreshThread()
+            self.ollama_refresh_thread.finished.connect(self.handle_ollama_models_refreshed)
+            self.ollama_refresh_thread.error.connect(self.handle_ollama_error)
+            self.ollama_refresh_thread.start()
+        except Exception as e:
+            self.status_label.setText(f"Error checking Ollama: {str(e)}")
+            ErrorHandler.log_error(f"Error checking Ollama: {str(e)}")
     
     def handle_ollama_models_refreshed(self, model_names):
         """Handle the refreshed list of Ollama models"""
         self.ollama_models = model_names
-        self.status_label.setText("Ollama models refreshed")
+        self.ollama_available = len(model_names) > 0
         
-        # Update the model dropdown
-        if IS_MACOS:  # macOS
-            self.ollama_model_combo.clear()
-            self.ollama_model_combo.addItems(self.ollama_models)
+        # Check if we need to rebuild the Ollama UI section
+        if self.ollama_available and self.ollama_models and not hasattr(self, 'ollama_model_combo'):
+            # Find and remove the old Ollama section
+            for i in range(self.left_layout.count()):
+                widget = self.left_layout.itemAt(i).widget()
+                if isinstance(widget, CollapsibleSection) and widget.title == "Ollama Prompt Enhancement":
+                    widget.setParent(None)
+                    break
+            
+            # Create new Ollama section with full UI
+            self._create_ollama_enhancement_ui()
+            
+            # Update status
+            self.status_label.setText("Ollama connected and UI rebuilt")
+            return
+        
+        # If the UI exists, just update the model dropdown
+        if hasattr(self, 'ollama_model_combo'):
+            self.status_label.setText("Ollama models refreshed")
+            
+            # Update the model dropdown
+            if IS_MACOS:  # macOS
+                self.ollama_model_combo.clear()
+                self.ollama_model_combo.addItems(self.ollama_models)
+            else:
+                self.ollama_model_combo.clear()
+                self.ollama_model_combo.addItems(self.ollama_models)
         else:
-            self.ollama_model_combo.clear()
+            # Still no models available
+            self.status_label.setText("No Ollama models found")
+    
+    def _create_ollama_enhancement_ui(self):
+        """Create the full Ollama enhancement UI"""
+        ollama_section = CollapsibleSection("Ollama Prompt Enhancement")
+        
+        # Create a container widget for Ollama controls
+        ollama_content = QWidget()
+        ollama_layout = QVBoxLayout(ollama_content)
+        ollama_layout.setSpacing(5)
+        ollama_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Model selection in a grid
+        ollama_model_grid = QGridLayout()
+        ollama_model_grid.setSpacing(5)
+        
+        ollama_model_label = QLabel("Ollama Model:")
+        ollama_model_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        
+        # Use the right control based on platform
+        if IS_MACOS:  # macOS
+            self.ollama_model_combo = MacDropdownButton(self.ollama_models)
+            # Don't connect directly to refresh_ollama_models to avoid UI freezing
+        else:
+            self.ollama_model_combo = QComboBox()
             self.ollama_model_combo.addItems(self.ollama_models)
+            # Don't connect directly to refresh_ollama_models to avoid UI freezing
+        
+        refresh_ollama_button = QPushButton("Refresh")
+        refresh_ollama_button.setMaximumWidth(70)
+        
+        refresh_ollama_button.clicked.connect(self.refresh_ollama_models)
+        
+        ollama_model_grid.addWidget(ollama_model_label, 0, 0)
+        ollama_model_grid.addWidget(self.ollama_model_combo, 0, 1)
+        ollama_model_grid.addWidget(refresh_ollama_button, 0, 2)
+        
+        # Input mode selection row
+        input_mode_layout = QHBoxLayout()
+        self.description_radio = QRadioButton("Description to Tags")
+        self.tags_radio = QRadioButton("Enhance Tags")
+        self.tags_radio.setChecked(True)  # Default to tag enhancement
+        input_mode_layout.addWidget(self.description_radio)
+        input_mode_layout.addWidget(self.tags_radio)
+        
+        # Enhance button and input row
+        enhance_grid = QGridLayout()
+        enhance_grid.setSpacing(5)
+        
+        enhance_label = QLabel("Input:")
+        enhance_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        
+        self.enhance_input = QLineEdit()
+        self.enhance_input.setPlaceholderText("Enter text to enhance...")
+        
+        self.enhance_button = QPushButton("Enhance")
+        self.enhance_button.clicked.connect(self.enhance_prompt)
+        self.enhance_button.setMaximumWidth(70)
+        
+        enhance_grid.addWidget(enhance_label, 0, 0)
+        enhance_grid.addWidget(self.enhance_input, 0, 1)
+        enhance_grid.addWidget(self.enhance_button, 0, 2)
+        
+        # Add all layouts to main layout
+        ollama_layout.addLayout(ollama_model_grid)
+        ollama_layout.addLayout(input_mode_layout)
+        ollama_layout.addLayout(enhance_grid)
+        
+        # Add container to section
+        ollama_section.addWidget(ollama_content)
+        
+        # Add section to left panel
+        self.left_layout.addWidget(ollama_section)
     
     def update_model_info_from_tabs(self):
         """Update model info when switching between Hugging Face and Local models tabs"""
@@ -2247,8 +2355,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'enhance_button'):
             self.enhance_button.setEnabled(True)
             
-        # Show error message if really needed
-        QMessageBox.warning(self, "Ollama Error", error_message)
+        # Log the error
+        ErrorHandler.log_error(f"Ollama error: {error_message}")
+        
+        # Only show a message box for non-connection errors
+        if "connection" not in error_message.lower() and "connect" not in error_message.lower():
+            QMessageBox.warning(self, "Ollama Error", error_message)
     
     def apply_app_icon_preset(self):
         """Apply a preset for generating app icons
