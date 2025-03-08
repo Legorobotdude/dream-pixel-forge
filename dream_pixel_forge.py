@@ -27,7 +27,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit,
                              QScrollArea, QTextEdit, QSplitter, QGroupBox)
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QSize, 
                          QPropertyAnimation, QEasingCurve)
-from PyQt6.QtGui import QPixmap, QImage, QAction, QPainter, QColor, QFont, QFontMetrics, QCursor
+from PyQt6.QtGui import (QIcon, QPixmap, QImage, QAction, QPainter, QColor, 
+                         QFont, QCursor, QActionGroup)
 from diffusers import (StableDiffusionPipeline, StableDiffusionXLPipeline, 
                       KandinskyV22Pipeline, DDIMScheduler, DPMSolverMultistepScheduler, 
                       DPMSolverSinglestepScheduler, EulerAncestralDiscreteScheduler, 
@@ -1496,18 +1497,36 @@ class MainWindow(QMainWindow):
         # Theme submenu
         theme_menu = QMenu("Theme", self)
         
+        # Create action group for theme selection (ensures only one is selected)
+        theme_action_group = QActionGroup(self)
+        theme_action_group.setExclusive(True)
+        
+        # Get current theme
+        current_theme = QApplication.instance().property("theme") or "modern_flat"
+        
         # Dark theme action
         dark_theme_action = QAction("Dark Theme", self)
         dark_theme_action.setCheckable(True)
-        dark_theme_action.setChecked(True)
+        dark_theme_action.setChecked(current_theme == "dark")
         dark_theme_action.triggered.connect(lambda: ThemeManager.apply_theme(QApplication.instance(), "dark"))
+        theme_action_group.addAction(dark_theme_action)
         theme_menu.addAction(dark_theme_action)
         
         # Light theme action
         light_theme_action = QAction("Light Theme", self)
         light_theme_action.setCheckable(True)
+        light_theme_action.setChecked(current_theme == "light")
         light_theme_action.triggered.connect(lambda: ThemeManager.apply_theme(QApplication.instance(), "light"))
+        theme_action_group.addAction(light_theme_action)
         theme_menu.addAction(light_theme_action)
+        
+        # Modern Flat Design theme action
+        modern_flat_theme_action = QAction("Modern Flat Design", self)
+        modern_flat_theme_action.setCheckable(True)
+        modern_flat_theme_action.setChecked(current_theme == "modern_flat")
+        modern_flat_theme_action.triggered.connect(lambda: ThemeManager.apply_theme(QApplication.instance(), "modern_flat"))
+        theme_action_group.addAction(modern_flat_theme_action)
+        theme_menu.addAction(modern_flat_theme_action)
         
         # Add theme menu to View menu
         view_menu.addMenu(theme_menu)
