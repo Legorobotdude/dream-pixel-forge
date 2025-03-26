@@ -35,13 +35,33 @@ from diffusers import (StableDiffusionPipeline, StableDiffusionXLPipeline,
                       EulerDiscreteScheduler, LMSDiscreteScheduler, HeunDiscreteScheduler, 
                       KDPM2AncestralDiscreteScheduler, KDPM2DiscreteScheduler, 
                       PNDMScheduler, DDPMScheduler, DEISMultistepScheduler, 
-                      DPMSolverSDEScheduler, KarrasVeScheduler)
+                      DPMSolverSDEScheduler, KarrasVeScheduler, FluxPipeline)
 from huggingface_hub import scan_cache_dir, HfFolder, model_info
+import gc
 
 # Platform detection
 IS_MACOS = platform.system() == "Darwin"
 IS_WINDOWS = platform.system() == "Windows"
 IS_LINUX = platform.system() == "Linux"
+
+# Patch Flux rope function for MPS compatibility
+if IS_MACOS:
+    try:
+        import diffusers.models.transformers.transformer_flux as flux_transformer
+        if hasattr(flux_transformer, 'rope'):
+            _original_rope = flux_transformer.rope
+            def mps_compatible_rope(pos: torch.Tensor, dim: int, theta: int) -> torch.Tensor:
+                """Fixed rope function that properly handles MPS device by moving computation to CPU first"""
+                assert dim % 2 == 0, "The dimension must be even."
+                if pos.device.type == "mps":
+                    return _original_rope(pos.to("cpu"), dim, theta).to(device=pos.device)
+                else:
+                    return _original_rope(pos, dim, theta)
+            # Apply the patch
+            flux_transformer.rope = mps_compatible_rope
+            print("Applied MPS compatibility patch for Flux")
+    except Exception as e:
+        print(f"Warning: Could not patch Flux for MPS: {str(e)}")
 
 # Local models directory
 LOCAL_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -257,6 +277,23 @@ MODEL_TYPES = {
         "supports_negative_prompt": True,
         "default_guidance_scale": 9.0,
         "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["sdxl"]
+    },
+    "Flux": {
+        "pipeline": FluxPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,  # Flux uses 1024x1024 by default
+        "supports_negative_prompt": False,
+        "default_guidance_scale": 7.5,
+        "torch_dtype": get_torch_dtype(),  # Use the proper dtype for the device
+        "device_map": get_device()  # Use the proper device (MPS on Mac)
+    },
+    "Flux.1-schnell": {
+        "pipeline": FluxPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,  # Flux uses 1024x1024 by default
+        "supports_negative_prompt": False,
+        "default_guidance_scale": 7.5,
+        "torch_dtype": get_torch_dtype(),  # Use the proper dtype for the device
+        "device_map": get_device(),  # Use the proper device (MPS on Mac)
+        "default_steps": 4  # Schnell version uses fewer steps
     }
 }
 
@@ -362,6 +399,27 @@ AVAILABLE_MODELS = {
         "size_gb": 7.0,
         "negative_prompt": DEFAULT_NEGATIVE_PROMPTS["pony"]
     },
+    "Flux.1-dev": {
+        "model_id": "black-forest-labs/FLUX.1-dev",
+        "pipeline": FluxPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,  # Flux uses 1024x1024 by default
+        "supports_negative_prompt": False,  # Flux doesn't use negative prompts
+        "default_guidance_scale": 7.5,
+        "description": "High-quality model optimized for natural language prompts (needs 12GB+ VRAM)",
+        "size_gb": 12.0,
+        "torch_dtype": torch.bfloat16  # Flux requires bfloat16 for optimal performance
+    },
+    "Flux.1-schnell": {
+        "model_id": "black-forest-labs/FLUX.1-schnell",
+        "pipeline": FluxPipeline,
+        "resolution_presets": SDXL_RESOLUTION_PRESETS,  # Flux uses 1024x1024 by default
+        "supports_negative_prompt": False,  # Flux doesn't use negative prompts
+        "default_guidance_scale": 7.5,
+        "description": "Fast version of Flux optimized for quick generation (needs 8GB+ VRAM)",
+        "size_gb": 8.0,
+        "torch_dtype": torch.bfloat16,  # Flux requires bfloat16 for optimal performance
+        "default_steps": 4  # Schnell is optimized for fewer steps
+    }
 }
 
 def is_model_downloaded(model_id):
@@ -439,328 +497,163 @@ class GenerationThread(QThread):
 
     def run(self):
         try:
-            # Initialize the pipeline
-            self.progress.emit(0, "Loading model...")
-            model_id = self.model_config["model_id"]
-            pipeline_class = self.model_config["pipeline"]
-            size_gb = self.model_config.get("size_gb", 4.0)
-            
-            # Get the appropriate device and prepare
+            # Get device
             device = get_device()
             
-            # Clear CUDA cache if available
-            if device == "cuda":
-                try:
-                    torch.cuda.empty_cache()
-                    ErrorHandler.log_info(f"VRAM available: {torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024:.2f} GB")
-                except Exception as e:
-                    ErrorHandler.log_warning(f"Unable to clear CUDA cache: {str(e)}")
-            elif device == "mps":
-                # No equivalent cache clearing for MPS
-                pass
+            # If using MPS (Mac GPU) with Flux models, we should use CPU
+            is_flux_model = "flux" in self.model_config.get("model_id", "").lower() or self.model_config.get("pipeline") == FluxPipeline
             
-            # Check if model is already downloaded
-            if not is_model_downloaded(model_id):
-                self.progress.emit(0, f"First time using {model_id}. Downloading (~{size_gb:.1f}GB)...")
-                
-                # Start a thread to provide ongoing download status
-                try:
-                    self.download_tracker = DownloadTracker(model_id, size_gb)
-                    self.download_tracker.progress.connect(lambda msg: self.progress.emit(0, msg))
-                    self.download_tracker.start()
-                    
-                    # Give the tracker a moment to show its first message
-                    time.sleep(0.5)
-                    QApplication.processEvents()
-                except Exception as e:
-                    ErrorHandler.log_warning(f"Failed to start download tracker: {str(e)}")
-            
-            # Initialize pipeline
-            ErrorHandler.log_info(f"Initializing pipeline for model: {model_id}")
-            
-            # Check if this is a local model
-            is_local = self.model_config.get("is_local", False)
-            
-            # Get appropriate torch dtype
-            torch_dtype = get_torch_dtype()
-            
-            if is_local and os.path.exists(model_id) and model_id.endswith((".safetensors", ".ckpt")):
-                ErrorHandler.log_info(f"Loading local model from: {model_id}")
-                self.progress.emit(0, f"Loading local model from: {os.path.basename(model_id)}...")
-                
-                try:
-                    # Load from single file (used for Civitai models)
-                    self.pipe = pipeline_class.from_single_file(
-                        model_id,
-                        torch_dtype=torch_dtype
-                    )
-                    ErrorHandler.log_info("Local model loaded successfully")
-                except Exception as e:
-                    error_msg = f"Error loading local model: {str(e)}"
-                    ErrorHandler.log_warning(error_msg)
-                    # Try the regular from_pretrained as a fallback
-                    ErrorHandler.log_info("Trying alternative loading method...")
-                    try:
-                        self.pipe = pipeline_class.from_pretrained(
-                            model_id,
-                            torch_dtype=torch_dtype,
-                            local_files_only=True
-                        )
-                    except Exception as fallback_error:
-                        raise Exception(f"Failed to load local model using both methods. Original error: {str(e)}. Fallback error: {str(fallback_error)}")
-                
-                # Fix UNet for local SDXL models that expect additional embeddings
-                try:
-                    if pipeline_class == StableDiffusionXLPipeline or "XL" in model_id:
-                        # Check if UNet has addition_embed_type set
-                        if hasattr(self.pipe.unet, "config") and hasattr(self.pipe.unet.config, "addition_embed_type"):
-                            if self.pipe.unet.config.addition_embed_type is not None:
-                                ErrorHandler.log_info("Detected SDXL model that requires additional embeddings")
-                                ErrorHandler.log_info("Setting addition_embed_type to None to prevent errors")
-                                self.pipe.unet.config.addition_embed_type = None
-                                ErrorHandler.log_info("UNet configuration updated for compatibility with local model")
-                except Exception as e:
-                    ErrorHandler.log_warning(f"Could not fix UNet configuration: {str(e)}")
-                    ErrorHandler.log_warning("Generation might fail with this model")
+            # For Flux models on Mac, force CPU mode
+            if is_flux_model and (device == "mps"):
+                self.progress.emit(0, f"Loading {self.model_config.get('model_id', 'model')} in CPU mode (required for Flux on Mac)...")
+                device = "cpu"  # Force CPU for Flux models on Mac
+                os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
             else:
-                # Load remote model from Hugging Face Hub
-                try:
-                    self.pipe = pipeline_class.from_pretrained(
-                        model_id,
-                        torch_dtype=torch_dtype
-                    )
-                except Exception as e:
-                    if "401 Client Error" in str(e):
-                        raise Exception(f"Authentication error: This model requires Hugging Face login. Please check your token. Error: {str(e)}")
-                    elif "404 Client Error" in str(e):
-                        raise Exception(f"Model not found: The model '{model_id}' does not exist or is not publicly available. Error: {str(e)}")
-                    else:
-                        raise Exception(f"Failed to load model '{model_id}': {str(e)}")
+                self.progress.emit(0, f"Loading {self.model_config.get('model_id', 'model')}...")
             
-            # Special handling for Pony Diffusion - Set clip_skip=2
-            if "pony" in model_id.lower() and hasattr(self.pipe, "text_encoder"):
-                ErrorHandler.log_info("Setting clip_skip=2 for Pony Diffusion model")
-                # For SDXL models with text_encoder and text_encoder_2
-                if hasattr(self.pipe, "text_encoder_2"):
-                    # Store only the penultimate layer's hidden states in both encoders
-                    self.pipe.text_encoder.config.clip_skip = 2
-                    self.pipe.text_encoder_2.config.clip_skip = 2
-                else:
-                    # For standard SD models with a single text encoder
-                    self.pipe.text_encoder.config.clip_skip = 2
-                ErrorHandler.log_info("Clip skip set to 2 for better results with Pony Diffusion")
+            # Load the pipeline
+            pipeline_cls = self.model_config.get("pipeline", StableDiffusionPipeline)
             
-            # Stop the download tracker if it's running
-            if self.download_tracker:
-                self.download_tracker.stop()
-                self.download_tracker.wait()
-                self.download_tracker = None
+            # Configure loading options
+            dtype = self.model_config.get("torch_dtype", get_torch_dtype())
+            
+            # For Flux models on Mac, use float32 regardless of what's configured
+            if is_flux_model and device == "cpu":
+                dtype = torch.float32
+            
+            # Load model
+            self.progress.emit(25, "Loading model...")
+            
+            # Get model ID
+            model_id = self.model_config.get("model_id")
+            
+            # Standard loading for all models
+            self.pipe = pipeline_cls.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                use_safetensors=True
+            )
+            
+            # Move model to device (except Flux which stays on CPU)
+            if not (is_flux_model and device == "cpu"):
+                self.progress.emit(50, f"Moving model to {device}...")
+                self.pipe = self.pipe.to(device)
                 
-                # Let the user know download has completed
-                self.progress.emit(0, f"Model {model_id} downloaded successfully! Moving to acceleration device...")
-                QApplication.processEvents()  # Make sure the message is displayed
-            
-            # Move model to appropriate acceleration device
-            if device != "cpu":
-                self.progress.emit(0, f"Moving model to {device.upper()}...")
-                ErrorHandler.log_info(f"Moving model to {device.upper()}...")
+            # Set scheduler if specified and it's not a string
+            if self.sampler and not isinstance(self.sampler, str):
                 try:
-                    self.pipe = self.pipe.to(device)
+                    self.pipe.scheduler = self.sampler.from_config(self.pipe.scheduler.config)
+                except Exception as e:
+                    ErrorHandler.log_warning(f"Error setting scheduler: {str(e)}")
+            
+            # Prepare seed - use specified seed or generate a random one
+            if self.seed is None:
+                seed = random.randint(0, 2147483647)
+            else:
+                seed = self.seed
+            
+            # Save the seed for later reference
+            self.used_seed = seed
+            
+            # Create generator with seed - always use CPU for the generator
+            generator = torch.Generator(device="cpu").manual_seed(seed)
+            
+            # Prepare width and height based on model
+            width = self.width
+            height = self.height
+            
+            # Check if model supports negative prompt
+            supports_negative_prompt = self.model_config.get("supports_negative_prompt", True)
+            
+            # Get guidance scale with a fallback to the default
+            guidance_scale = self.guidance_scale
+            
+            # Use model's default guidance scale if ours is None
+            if guidance_scale is None:
+                guidance_scale = self.model_config.get("default_guidance_scale", 7.5)
+            
+            # Prepare generation kwargs
+            generation_kwargs = {
+                "prompt": self.prompt,
+                "generator": generator,
+                "num_inference_steps": self.num_inference_steps,
+                "width": width,
+                "height": height
+            }
+            
+            # Add guidance scale if model supports it
+            if supports_negative_prompt:
+                generation_kwargs["guidance_scale"] = guidance_scale
+            
+            # Add negative prompt if supported
+            if supports_negative_prompt and self.negative_prompt:
+                generation_kwargs["negative_prompt"] = self.negative_prompt
+            
+            # Special configuration for Flux models
+            if is_flux_model:
+                # Flux models use "max_sequence_length" instead of text_encoder specific settings
+                generation_kwargs["max_sequence_length"] = 512
+                
+                # For Flux models on Mac, use fewer steps if not specified
+                if "default_steps" in self.model_config and self.num_inference_steps > self.model_config["default_steps"]:
+                    generation_kwargs["num_inference_steps"] = self.model_config["default_steps"]
+                    ErrorHandler.log_info(f"Using {self.model_config['default_steps']} steps for Flux model")
+            
+            # Set safety checker to None to prevent NSFW filtering
+            if hasattr(self.pipe, "safety_checker"):
+                self.pipe.safety_checker = None
+            
+            # Generate the image
+            self.progress.emit(75, "Generating image...")
+            
+            # Handle batch generation
+            if self.batch_size > 1:
+                # Generate batch of images
+                batch_images = []
+                for i in range(self.batch_size):
+                    self.progress.emit(75 + (i / self.batch_size * 25), f"Generating image {i+1} of {self.batch_size}...")
+                    # Need to recreate the generator for each image to get different results
+                    if i > 0:  # Keep the first seed as specified
+                        batch_seed = random.randint(0, 2147483647)
+                        generation_kwargs["generator"] = torch.Generator(device="cpu").manual_seed(batch_seed)
                     
-                    # Try to enable memory efficient attention if CUDA is available
-                    if device == "cuda":
-                        try:
-                            if hasattr(self.pipe, "enable_xformers_memory_efficient_attention"):
-                                ErrorHandler.log_info("Enabling memory efficient attention...")
-                                self.pipe.enable_xformers_memory_efficient_attention()
-                        except Exception as e:
-                            ErrorHandler.log_warning(f"Could not enable memory efficient attention: {str(e)}")
-                            ErrorHandler.log_warning("Continuing without memory optimization...")
-                except Exception as e:
-                    if "CUDA out of memory" in str(e):
-                        raise Exception(f"GPU out of memory while loading model. Try using CPU mode or a smaller model. Error: {str(e)}")
-                    elif "MPS backend out of memory" in str(e):
-                        raise Exception(f"Metal (MPS) out of memory while loading model. Try using CPU mode or a smaller model. Error: {str(e)}")
-                    else:
-                        raise Exception(f"Failed to move model to {device} device: {str(e)}")
-
-            # Generate the images in batch
-            self.progress.emit(0, f"Starting generation of {self.batch_size} images...")
-            ErrorHandler.log_info(f"Starting generation with prompt: {self.prompt}")
-            ErrorHandler.log_info(f"Negative prompt: {self.negative_prompt}")
-            ErrorHandler.log_info(f"Steps: {self.num_inference_steps}, Guidance: {self.guidance_scale}")
-            ErrorHandler.log_info(f"Resolution: {self.width}x{self.height}, Batch size: {self.batch_size}")
+                    output = self.pipe(**generation_kwargs)
+                    batch_images.extend(output.images)
+                    # Emit signal for each image
+                    for j, img in enumerate(output.images):
+                        self.image_ready.emit(img, i * len(output.images) + j, self.batch_size * len(output.images))
+                
+                images = batch_images
+            else:
+                # Generate single image
+                output = self.pipe(**generation_kwargs)
+                images = output.images
+                # Emit signal for the single image
+                for i, img in enumerate(images):
+                    self.image_ready.emit(img, i, len(images))
             
-            # Track seeds for each generated image
-            self.generated_seeds = []
-            generated_images = []
+            self.progress.emit(100, "Generation complete!")
+            self.finished.emit(images)
             
-            for i in range(self.batch_size):
-                # Update progress for each image in the batch
-                self.progress.emit(int(i / self.batch_size * 100), f"Generating image {i+1} of {self.batch_size}...")
-                
-                # Set the current image index for the progress callback
-                self.current_image_index = i
-                
-                # Set generator for reproducible results if seed is provided
-                if i == 0 and self.seed is not None:
-                    # For the first image, use the provided seed
-                    generator = torch.Generator(device=get_device() if get_device() != "mps" else "cpu")
-                    generator.manual_seed(self.seed)
-                    current_seed = self.seed
-                    ErrorHandler.log_info(f"Using seed for image {i+1}: {current_seed}")
-                else:
-                    # For subsequent images or if no seed was provided, use random seeds
-                    generator = torch.Generator(device=get_device() if get_device() != "mps" else "cpu")
-                    # Generate a seed that fits in a 32-bit integer to avoid overflow
-                    current_seed = random.randint(0, 2147483647)
-                    generator.manual_seed(current_seed)
-                    ErrorHandler.log_info(f"Using random seed for image {i+1}: {current_seed}")
-                
-                # Store the seed for later reference
-                self.generated_seeds.append(current_seed)
-                
-                # Set the sampler/scheduler if specified
-                if self.sampler:
-                    try:
-                        # Map sampler names to scheduler classes
-                        schedulers = {
-                            "euler": EulerDiscreteScheduler,
-                            "euler_ancestral": EulerAncestralDiscreteScheduler,
-                            "heun": HeunDiscreteScheduler,
-                            "dpm_2": KDPM2DiscreteScheduler,
-                            "dpm_2_ancestral": KDPM2AncestralDiscreteScheduler,
-                            "lms": LMSDiscreteScheduler,
-                            "pndm": PNDMScheduler,
-                            "ddim": DDIMScheduler,
-                            "ddpm": DDPMScheduler,
-                            "deis": DEISMultistepScheduler,
-                            "dpm_sde": DPMSolverSDEScheduler,
-                            "dpm_solver": DPMSolverMultistepScheduler,
-                            "karras_ve": KarrasVeScheduler,
-                            "dpmsolver++": DPMSolverMultistepScheduler,
-                            "dpmsingle": DPMSolverSinglestepScheduler,
-                            "dpmpp_2m": DPMSolverMultistepScheduler,
-                            "dpmpp_sde": DPMSolverSDEScheduler,
-                            "dpmpp_2s_ancestral": DPMSolverSinglestepScheduler
-                        }
-                        
-                        if self.sampler in schedulers:
-                            ErrorHandler.log_info(f"Using sampler: {self.sampler}")
-                            # Get the config from the current scheduler
-                            old_config = self.pipe.scheduler.config
-                            # Create new scheduler with the same config
-                            new_scheduler = schedulers[self.sampler].from_config(old_config)
-                            # Replace the scheduler
-                            self.pipe.scheduler = new_scheduler
-                        else:
-                            ErrorHandler.log_warning(f"Unknown sampler: {self.sampler}, using default")
-                    except Exception as e:
-                        ErrorHandler.log_warning(f"Error setting sampler: {str(e)}")
-                        ErrorHandler.log_warning("Using default sampler")
-                
-                # Generate the image with specific error handling for different error types
-                with torch.inference_mode():
-                    try:
-                        # Different models might have slightly different APIs
-                        if isinstance(self.pipe, StableDiffusionXLPipeline):
-                            # For SDXL pipelines
-                            image = self.pipe(
-                                prompt=self.prompt,
-                                negative_prompt=self.negative_prompt,
-                                num_inference_steps=self.num_inference_steps,
-                                guidance_scale=self.guidance_scale,
-                                width=self.width,
-                                height=self.height,
-                                callback=self.progress_callback,
-                                callback_steps=1,
-                                generator=generator
-                            ).images[0]
-                        elif isinstance(self.pipe, KandinskyV22Pipeline):
-                            # Kandinsky has a different API
-                            image = self.pipe(
-                                prompt=self.prompt,
-                                negative_prompt=self.negative_prompt,
-                                num_inference_steps=self.num_inference_steps,
-                                guidance_scale=self.guidance_scale,
-                                width=self.width,
-                                height=self.height,
-                                callback=self.progress_callback,
-                                callback_steps=1,
-                                generator=generator
-                            ).images[0]
-                        else:
-                            # Standard StableDiffusion
-                            image = self.pipe(
-                                prompt=self.prompt,
-                                negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
-                                num_inference_steps=self.num_inference_steps,
-                                guidance_scale=self.guidance_scale,
-                                width=self.width,
-                                height=self.height,
-                                callback=self.progress_callback,
-                                callback_steps=1,
-                                generator=generator
-                            ).images[0]
-                    except TypeError as e:
-                        if "argument of type 'NoneType' is not iterable" in str(e):
-                            print("Detected issue with added_cond_kwargs, trying with empty dict...")
-                            if isinstance(self.pipe, StableDiffusionXLPipeline):
-                                # Fallback for SDXL models with the NoneType error
-                                image = self.pipe(
-                                    prompt=self.prompt,
-                                    negative_prompt=self.negative_prompt,
-                                    num_inference_steps=self.num_inference_steps,
-                                    guidance_scale=self.guidance_scale,
-                                    width=self.width,
-                                    height=self.height,
-                                    callback=self.progress_callback,
-                                    callback_steps=1,
-                                    generator=generator,
-                                    added_cond_kwargs={"text_embeds": torch.zeros(1, 1280, device=self.pipe.device), 
-                                                      "time_ids": torch.zeros(1, 6, device=self.pipe.device)}
-                                ).images[0]
-                            else:
-                                # For standard SD models with the same issue
-                                image = self.pipe(
-                                    prompt=self.prompt,
-                                    negative_prompt=self.negative_prompt if self.model_config["supports_negative_prompt"] else None,
-                                    num_inference_steps=self.num_inference_steps,
-                                    guidance_scale=self.guidance_scale,
-                                    width=self.width,
-                                    height=self.height,
-                                    callback=self.progress_callback,
-                                    callback_steps=1,
-                                    generator=generator,
-                                    added_cond_kwargs={}
-                                ).images[0]
-                        else:
-                            # Re-raise if it's a different error
-                            raise
-                
-                generated_images.append(image)
-                # Emit signal for UI update with each generated image
-                self.image_ready.emit(image, i, self.batch_size)
-
-            print(f"Generation of {self.batch_size} images completed successfully")
-            self.finished.emit(generated_images)
         except Exception as e:
-            error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            print(error_msg)
-            self.error.emit(error_msg)
+            ErrorHandler.log_error(f"Generation Error: {str(e)}")
+            
+            # For MPS (Metal) out of memory errors, provide a more helpful message
+            if device == "mps" and "MPS backend out of memory" in str(e):
+                raise Exception(f"Metal (MPS) out of memory while loading model. Try using CPU mode or a smaller model. Error: {str(e)}")
+            
+            self.error.emit(f"Error: {str(e)}")
+            
+            # Log the traceback for debugging
+            traceback.print_exc()
+            
         finally:
-            # Clean up
-            if self.download_tracker:
-                self.download_tracker.stop()
-                self.download_tracker.wait()
-            
-            if self.pipe is not None:
+            # Clean up to prevent memory leaks
+            if hasattr(self, 'pipe'):
                 del self.pipe
-            
-            # Clean up device-specific resources
-            if get_device() == "cuda" and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            # No explicit cleanup needed for MPS devices
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            if HAS_MPS:
+                torch.mps.empty_cache()
 
 class MainWindow(QMainWindow):
     # Class variable to keep track of generation counter
