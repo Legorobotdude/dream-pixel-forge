@@ -1,4 +1,23 @@
-# DreamPixelForge
+# DreamPixelForge (Legacy Desktop App)
+
+> [!IMPORTANT]
+> This repository contains the original local Stable Diffusion desktop
+> application and is no longer the primary Dream Pixel Forge product.
+>
+> The current product is the Dream Pixel Forge agentic visual production
+> platform.
+
+Dream Pixel Forge is now an agentic visual production platform for product
+photography, ads, moodboards, thumbnails, and AI influencer content:
+
+- **Homepage:** https://www.dreampixelforge.com/
+- **MCP and CLI documentation:** https://www.dreampixelforge.com/cli
+- **Product photography:** https://www.dreampixelforge.com/ai-product-photography
+- **Current GitHub:** https://github.com/Legorobotdude
+
+Everything below documents the legacy desktop app, kept here for history.
+
+---
 
 A modern GUI application for running multiple AI image generation models locally on your machine, transforming your text prompts into stunning images.
 
